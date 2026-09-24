@@ -1,0 +1,10 @@
+code: UK
+spelling: en-GB
+currency: GBP
+phone_format: "+44 XXXX XXXXXX"
+channels_allowed: [email]
+contactable_entity_types: [ltd, plc, llp]   # sole traders & partnerships need prior consent → disqualify
+require_postal_address: true
+require_unsubscribe: true
+require_source_disclosure: true            # say where we found their details
+send_window_local: {days: [TUE, WED, THU], start: "09:00", end: "11:00"}

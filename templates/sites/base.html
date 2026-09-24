@@ -1,0 +1,94 @@
+{#- Base one-page site. Category templates override the blocks; style profiles supply the CSS. -#}
+<!doctype html>
+<html lang="{{ locale }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{{ copy.seo_title }}</title>
+  <meta name="description" content="{{ copy.meta_description }}">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <style>
+    :root {
+      --primary: {{ brand.primary }};
+      --primary-dark: {{ brand.primary_dark }};
+      --accent: {{ brand.accent }};
+      --ink: {{ brand.ink }};
+      --paper: {{ brand.paper }};
+    }
+{{ style_css }}
+  </style>
+</head>
+<body class="family-{{ brand.family }}">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap header-row">
+      <a class="logo" href="#top" aria-label="{{ lead.business_name }} home"><img src="assets/logo.svg" alt="{{ lead.business_name }} logo" width="{{ logo_width }}" height="56"></a>
+      <nav aria-label="Main">
+        <a href="#about">About</a>
+        <a href="#services">{% block services_nav %}Services{% endblock %}</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <div class="wrap hero-inner">
+        {% block hero_kicker %}{% endblock %}
+        <h1>{{ copy.headline }}</h1>
+        <p class="lede">{{ copy.subheadline }}</p>
+        <a class="button" href="#contact">{{ copy.cta }}</a>
+      </div>
+    </section>
+
+    <section class="about" id="about" aria-labelledby="about-title">
+      <div class="wrap narrow">
+        <h2 id="about-title">{% block about_title %}About {{ lead.business_name }}{% endblock %}</h2>
+        <p>{{ copy.about }}</p>
+      </div>
+    </section>
+
+    <section class="services" id="services" aria-labelledby="services-title">
+      <div class="wrap">
+        <h2 id="services-title">{% block services_title %}Services{% endblock %}</h2>
+        <ul class="cards">
+          {% for service in copy.services %}
+          <li class="card">
+            <span class="icon" aria-hidden="true">{{ icon }}</span>
+            <h3>{{ service.name }}</h3>
+            <p>{{ service.description }}</p>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </section>
+
+    {% if gallery %}
+    <section class="gallery" aria-labelledby="gallery-title">
+      <div class="wrap">
+        <h2 id="gallery-title">Gallery</h2>
+        <ul class="gallery-grid">{% for img in gallery %}<li><img src="{{ img.src }}" alt="{{ img.alt }}" loading="lazy"></li>{% endfor %}</ul>
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="contact" id="contact" aria-labelledby="contact-title">
+      <div class="wrap narrow">
+        <h2 id="contact-title">{% block contact_title %}Get in touch{% endblock %}</h2>
+        <dl class="contact-list">
+          {% if lead.phone %}<div><dt>Phone</dt><dd><a href="tel:{{ phone_href }}">{{ lead.phone }}</a></dd></div>{% endif %}
+          {% if lead.email %}<div><dt>Email</dt><dd><a href="mailto:{{ lead.email }}">{{ lead.email }}</a></dd></div>{% endif %}
+          {% if lead.address %}<div><dt>Address</dt><dd><address>{{ lead.address }}</address><a href="{{ map_url }}" rel="noopener">Open in Google Maps</a></dd></div>{% endif %}
+        </dl>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>&copy; {{ year }} {{ lead.business_name }}{% if lead.region %} · {{ lead.region }}{% endif %}</p>
+    </div>
+  </footer>
+</body>
+</html>

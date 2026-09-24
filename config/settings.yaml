@@ -1,0 +1,51 @@
+# Global settings. Env vars override: DRY_RUN, DATABASE_URL, NOTIFY_WEBHOOK.
+
+# true = no external sends, no deploys, and LLM spend capped at dry_run_llm_cap_usd (spec §2.6)
+dry_run: true
+# Nothing is emailed without a CEO click until Phase 6 (spec §2.3)
+auto_send: false
+
+database_url: sqlite:///data/wots.db
+data_dir: data
+# Used for "today" in budgets and reports; the CEO is in New Zealand
+timezone: Pacific/Auckland
+
+atlas:
+  tick_seconds: 30
+  lease_seconds: 600            # a claim expires after this, releasing a crashed agent's lead
+  max_retries: 3                # retries after the first failure, then ESCALATED
+  retry_backoff_seconds: 30     # 30s, 60s, 120s ...
+  max_fix_count: 3              # NEEDS_FIX -> ESCALATED when fix_count reaches this
+
+wip:
+  max_wip: 2
+  wip_mode: batch               # batch: new work only when all current leads are APPROVED; rolling: whenever below max_wip
+  fairness_window_days: 7       # "fewer total leads this week" when choosing between free designers
+
+budget:
+  daily_llm_budget_usd: 5.00
+  dry_run_llm_cap_usd: 1.00
+
+# Per million tokens, USD. Used to cost every call in llm_usage.
+model_pricing:
+  claude-opus-5: {input: 5.00, output: 25.00}
+  claude-sonnet-5: {input: 2.00, output: 10.00}
+  claude-haiku-4-5: {input: 1.00, output: 5.00}
+
+outreach:
+  daily_send_cap: 20
+  followup_after_days: 5
+
+previews:
+  preview_ttl_days: 30
+
+retention_days: 180
+
+notify:
+  webhook: null                 # Telegram or Discord webhook URL; or set NOTIFY_WEBHOOK
+  on_statuses: [READY_FOR_APPROVAL, PITCH_DRAFTED, ESCALATED]
+
+qa:
+  lighthouse: {accessibility: 90, performance: 80, seo: 80}   # SEO ignores noindex (spec §7)
+  run_lighthouse: true
+  check_external_links: true      # unreachable external links are reported as medium, not a fail

@@ -1,0 +1,5 @@
+business_name,category,description,country,region,address,phone,email,contact_name,source_ref
+Harbour Line Plumbing,Plumber,"Family-run plumbing business handling repairs, leaks and hot water systems.",US,OR,"412 Alder Street, Portland, OR 97204",503-555-0147,hello@harbourlineplumbing.test,,sample-1
+The Copper Kettle Café,Café,"Neighbourhood café serving breakfast, lunch and locally roasted coffee.",UK,,"18 Market Row, Frome BA11 1BG",01632 960 482,info@copperkettlefrome.test,,sample-2
+Salt & Sage Day Spa,Day spa,"Day spa offering massage, facials and relaxation treatments.",AU,VIC,"27 Ocean Road, Torquay VIC 3228",03 5550 1832,bookings@saltandsagespa.test,,sample-3
+Northgate Bookkeeping,Bookkeeping,"Bookkeeping and payroll for small businesses and sole traders.",US,IL,"905 Northgate Ave, Suite 3, Evanston, IL 60201",847-555-0199,office@northgatebooks.test,Dana Ruiz,sample-4

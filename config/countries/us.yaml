@@ -1,0 +1,10 @@
+code: US
+spelling: en-US
+currency: USD
+phone_format: "(XXX) XXX-XXXX"
+channels_allowed: [email]          # no automated calls/SMS
+contactable_entity_types: [any]
+require_postal_address: true
+require_unsubscribe: true
+unsubscribe_honor_days: 10
+send_window_local: {days: [TUE, WED, THU], start: "09:00", end: "11:00"}

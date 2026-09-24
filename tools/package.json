@@ -1,0 +1,8 @@
+{
+  "name": "wots-tools",
+  "private": true,
+  "description": "Node tools Hawk calls from Python (spec §3: Lighthouse CLI)",
+  "dependencies": {
+    "lighthouse": "^13.5.0"
+  }
+}

@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+
+# Runtime data: database, lead folders, outbox, inbox (spec §8). Never commit leads' contact details.
+data/
+
+# Frontend and Node tools
+frontend/node_modules/
+frontend/dist/
+tools/node_modules/
+
+# Secrets and OS files
+.env
+.DS_Store

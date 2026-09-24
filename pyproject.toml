@@ -1,0 +1,39 @@
+[project]
+name = "wots-office"
+version = "0.1.0"
+description = "AI-agent office that finds small businesses, builds work on spec and pitches it, with the CEO approving everything."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "pyyaml>=6",
+    "pydantic>=2.7",
+    "apscheduler>=3.10,<4",
+    "anthropic>=1.8",
+    "httpx",
+    "python-dotenv>=1.0",
+    "jinja2>=3.1",
+    "playwright>=1.45",
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+wots = "wots.core.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["wots"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Import from the repo even if macOS hides the editable-install .pth file (see README)
+pythonpath = ["."]
+markers = ["e2e: full pipeline with a real browser and Lighthouse (slow)"]
