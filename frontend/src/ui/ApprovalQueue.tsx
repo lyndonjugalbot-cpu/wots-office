@@ -6,11 +6,11 @@ type Tab = "approvals" | "escalations";
 const WIDTHS = [375, 768, 1440] as const;
 
 export function ApprovalQueue({ onClose, onChanged, onOpenLead }: {
-  onClose: () => void; onChanged: () => void; onOpenLead: (id: number) => void;
+  onClose: () => void; onChanged: () => void; onOpenLead: (id: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>("approvals");
   const [items, setItems] = useState<Lead[]>([]);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const leads = await api.leads(tab === "approvals" ? "READY_FOR_APPROVAL" : "ESCALATED");
@@ -69,7 +69,7 @@ export function ApprovalQueue({ onClose, onChanged, onOpenLead }: {
   );
 }
 
-function Review({ id, mode, onDone, onOpenLead }: { id: number; mode: Tab; onDone: () => void; onOpenLead: (id: number) => void }) {
+function Review({ id, mode, onDone, onOpenLead }: { id: string; mode: Tab; onDone: () => void; onOpenLead: (id: string) => void }) {
   const [detail, setDetail] = useState<LeadDetail | null>(null);
   const [width, setWidth] = useState<(typeof WIDTHS)[number]>(1440);
   const [notes, setNotes] = useState("");
@@ -94,7 +94,7 @@ function Review({ id, mode, onDone, onOpenLead }: { id: number; mode: Tab; onDon
   };
 
   if (!detail) return <div className="queue__detail">{error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>}</div>;
-  const { lead, qa, copy } = detail;
+  const { item: lead, qa, copy } = detail;
   const scores = qa?.lighthouse?.scores ?? {};
   const assumptions = copy?.assumptions ?? [];
   const lastEscalation = [...detail.events].reverse().find((e) => e.to === "ESCALATED");
@@ -110,7 +110,7 @@ function Review({ id, mode, onDone, onOpenLead }: { id: number; mode: Tab; onDon
             {" · "}<button className="linkbtn" onClick={() => onOpenLead(id)}>timeline</button>
           </p>
         </div>
-        {qa && <span className={`chip ${qa.passed ? "chip--done" : "chip--failed"}`}>{qa.passed ? "HAWK PASSED" : "HAWK FAILED"}</span>}
+        {qa && <span className={`chip ${qa.passed ? "chip--done" : "chip--failed"}`}>{qa.passed ? "QA PASSED" : "QA FAILED"}</span>}
       </div>
 
       {mode === "escalations" && lastEscalation && (
@@ -123,9 +123,9 @@ function Review({ id, mode, onDone, onOpenLead }: { id: number; mode: Tab; onDon
             {WIDTHS.map((w) => (
               <button key={w} className={`btn btn--small ${width === w ? "btn--primary" : ""}`} onClick={() => setWidth(w)}>{w}px</button>
             ))}
-            <a className="linkbtn" href={api.fileUrl(id, "site/index.html")} target="_blank" rel="noreferrer">Open in new tab</a>
+            <a className="linkbtn" href={api.fileUrl(detail.files_base, "site/index.html")} target="_blank" rel="noreferrer">Open in new tab</a>
           </div>
-          <ScaledPreview width={width} title={`${lead.business_name} preview`} src={api.fileUrl(id, "site/index.html")} />
+          <ScaledPreview width={width} title={`${lead.business_name} preview`} src={api.fileUrl(detail.files_base, "site/index.html")} />
         </>
       )}
 
@@ -141,8 +141,8 @@ function Review({ id, mode, onDone, onOpenLead }: { id: number; mode: Tab; onDon
           {qa.screenshots.length > 0 && (
             <div className="shots">
               {qa.screenshots.map((s) => (
-                <a key={s} href={api.fileUrl(id, s)} target="_blank" rel="noreferrer" title={`Screenshot at ${s.match(/(\d+)\.png/)?.[1]}px`}>
-                  <img src={api.fileUrl(id, s)} alt={`Screenshot at ${s.match(/(\d+)\.png/)?.[1]}px`} />
+                <a key={s} href={api.fileUrl(detail.files_base, s)} target="_blank" rel="noreferrer" title={`Screenshot at ${s.match(/(\d+)\.png/)?.[1]}px`}>
+                  <img src={api.fileUrl(detail.files_base, s)} alt={`Screenshot at ${s.match(/(\d+)\.png/)?.[1]}px`} />
                 </a>
               ))}
             </div>
@@ -153,13 +153,13 @@ function Review({ id, mode, onDone, onOpenLead }: { id: number; mode: Tab; onDon
                 <li key={n} className={`issue issue--${i.severity}`}><b>{i.severity}</b> {i.description} <span className="muted">({i.where})</span></li>
               ))}
             </ul>
-          ) : <p className="muted">Hawk found no issues.</p>}
+          ) : <p className="muted">QA found no issues.</p>}
         </div>
       )}
 
       {assumptions.length > 0 && (
         <div className="warning panel">
-          <b>Quill assumed these:</b> {assumptions.join("; ")}. Check they're right for this business.
+          <b>The copywriter assumed these:</b> {assumptions.join("; ")}. Check they're right for this business.
         </div>
       )}
 
@@ -170,7 +170,8 @@ function Review({ id, mode, onDone, onOpenLead }: { id: number; mode: Tab; onDon
       <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)}
         placeholder={mode === "approvals" ? "Notes (required to reject: tell the designer what to change)" : "Notes for the designer (optional)"} />
 
-      <div className="plan__actions">
+      {!detail.can_decide && <p className="muted">Only the CEO (or a manager they delegated approvals to) can decide this.</p>}
+      <div className="plan__actions" hidden={!detail.can_decide}>
         {mode === "approvals" ? (
           <>
             <button className="btn btn--danger" disabled={busy} onClick={() => run(() => api.disqualify(id, notes || "ceo_decision"))}>Disqualify</button>
@@ -185,8 +186,8 @@ function Review({ id, mode, onDone, onOpenLead }: { id: number; mode: Tab; onDon
                 Retry at {detail.resume_status}
               </button>
             )}
-            {lead.assigned_to && (
-              <button className="btn btn--primary" disabled={busy} onClick={() => run(() => api.resolve(id, lead.scope === "website" ? "BUILDING" : "DESIGNING", notes))}>
+            {detail.send_back_to && (
+              <button className="btn btn--primary" disabled={busy} onClick={() => run(() => api.resolve(id, detail.send_back_to!, notes))}>
                 Send back to {lead.assigned_to}
               </button>
             )}

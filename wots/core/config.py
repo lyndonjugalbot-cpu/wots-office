@@ -11,7 +11,7 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = Path(os.environ.get("WOTS_CONFIG_DIR", ROOT / "config"))
@@ -23,6 +23,8 @@ class _Strict(BaseModel):
 
 class AtlasSettings(_Strict):
     tick_seconds: int = 30
+    max_jobs_per_org_per_tick: int = 10  # so one busy office can't starve the others
+    workers: int = 4                     # in-process job workers for `wots run`
     lease_seconds: int = 600
     max_retries: int = 3
     retry_backoff_seconds: int = 30
@@ -54,6 +56,24 @@ class PreviewSettings(_Strict):
     preview_ttl_days: int = 30
 
 
+class ResearchSettings(_Strict):
+    """Lead sourcing and verification (spec v2 §8, Phase 2)."""
+    # Off: Google's terms don't allow saving business names/addresses from the Places API (Maps Platform
+    # ToS 3.2.3), which a lead list needs. Turn on only after checking with Google.
+    places_enabled: bool = False
+    places_cost_per_request_usd: float = 0.035  # Text Search with phone + website fields; check Google's current price
+    max_places_requests_per_day: int = 100      # per office, so a typo in a search can't run up a bill
+    page_size: int = 20                         # the most Places returns per page (3 pages per query)
+    request_timeout_seconds: float = 10
+    website_check_timeout_seconds: float = 6
+    # OpenStreetMap (free): Nominatim finds the town, Overpass finds the businesses in it
+    nominatim_url: str = "https://nominatim.openstreetmap.org/search"
+    overpass_urls: list[str] = ["https://overpass-api.de/api/interpreter",
+                                "https://overpass.private.coffee/api/interpreter"]
+    max_osm_requests_per_day: int = 200        # per office; the public servers ask for light use
+    companies_house_page_size: int = 100       # advanced company search, UK
+
+
 class NotifySettings(_Strict):
     webhook: str | None = None
     on_statuses: list[str] = Field(default_factory=lambda: ["READY_FOR_APPROVAL", "PITCH_DRAFTED", "ESCALATED"])
@@ -74,12 +94,12 @@ class Settings(_Strict):
     atlas: AtlasSettings = AtlasSettings()
     wip: WipSettings = WipSettings()
     budget: BudgetSettings = BudgetSettings()
-    model_pricing: dict[str, Pricing] = Field(default_factory=dict)
     outreach: OutreachSettings = OutreachSettings()
     previews: PreviewSettings = PreviewSettings()
     retention_days: int = 180
     notify: NotifySettings = NotifySettings()
     qa: QASettings = QASettings()
+    research: ResearchSettings = ResearchSettings()
 
     @property
     def data_path(self) -> Path:
@@ -93,48 +113,25 @@ class Settings(_Strict):
         return min(cap, self.budget.dry_run_llm_cap_usd) if self.dry_run else cap
 
 
-class AgentConfig(_Strict):
-    name: str = ""
-    cls: str = Field(alias="class")
-    enabled: bool = False
-    scope: list[Literal["website", "ad_refresh"]]
-    owns: dict[str, str] = Field(default_factory=dict)
-    assigned_only: list[str] = Field(default_factory=list)
-    pool: list[str] = Field(default_factory=list)
-    style_profile: str | None = None
-    uses_llm: bool = False
-    model: str | None = None  # "fast", "strong" or an explicit model id
-    batch_size: int | None = None
+class ModelsConfig(_Strict):
+    """config/models.yaml: aliases (fast/strong) and prices."""
+    aliases: dict[str, str]
+    pricing: dict[str, Pricing]
+    no_effort: list[str] = Field(default_factory=list)
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    def resolve(self, name: str | None) -> str | None:
+        return self.aliases.get(name, name) if name else None
+
+    def supports_effort(self, model: str) -> bool:
+        return not any(model.startswith(m) for m in self.no_effort)
 
 
-class AgentDefaults(_Strict):
-    batch_size: int = 5
-    fast_model: str = "claude-haiku-4-5"
-    strong_model: str = "claude-opus-5"
+class BillingConfig(_Strict):
+    credit_value_usd: float = 0.01
+    internal_unlimited_credits: bool = True
 
-
-class AgentsFile(_Strict):
-    defaults: AgentDefaults = AgentDefaults()
-    agents: dict[str, AgentConfig]
-
-    @field_validator("agents")
-    @classmethod
-    def _names(cls, agents: dict[str, AgentConfig]) -> dict[str, AgentConfig]:
-        for name, agent in agents.items():
-            agent.name = name
-        return agents
-
-    def model_for(self, agent: AgentConfig) -> str | None:
-        if agent.model == "fast":
-            return self.defaults.fast_model
-        if agent.model == "strong":
-            return self.defaults.strong_model
-        return agent.model
-
-    def batch_size(self, agent: AgentConfig) -> int:
-        return agent.batch_size or self.defaults.batch_size
+    def credits(self, cost_usd: float) -> float:
+        return round(cost_usd / self.credit_value_usd, 4)
 
 
 class SendWindow(_Strict):
@@ -158,10 +155,19 @@ class CountryRules(_Strict):
     send_window_local: SendWindow
 
 
+class Trade(_Strict):
+    """config/trades.yaml: what to search for, per source."""
+    label: str
+    osm: list[tuple[str, str]] = Field(default_factory=list)  # OpenStreetMap key/value tags
+    sic: list[str] = Field(default_factory=list)  # UK SIC codes for Companies House
+
+
 class Config(BaseModel):
     settings: Settings
-    agents: AgentsFile
+    models: ModelsConfig
+    billing: BillingConfig
     countries: dict[str, CountryRules]
+    trades: dict[str, Trade] = Field(default_factory=dict)
 
 
 def _read(path: Path) -> dict:
@@ -185,7 +191,9 @@ def load_config(config_dir: Path = CONFIG_DIR) -> Config:
     countries = {
         (rules := CountryRules(**_read(p))).code: rules for p in sorted((config_dir / "countries").glob("*.yaml"))
     }
-    return Config(settings=Settings(**raw), agents=AgentsFile(**_read(config_dir / "agents.yaml")), countries=countries)
+    return Config(settings=Settings(**raw), models=ModelsConfig(**_read(config_dir / "models.yaml")),
+                  billing=BillingConfig(**_read(config_dir / "billing.yaml")), countries=countries,
+                  trades={k: Trade(**v) for k, v in _read(config_dir / "trades.yaml").items()})
 
 
 @lru_cache(maxsize=1)

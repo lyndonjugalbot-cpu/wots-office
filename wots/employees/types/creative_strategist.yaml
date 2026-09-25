@@ -1,0 +1,15 @@
+key: creative_strategist
+version: 1
+display_name: Creative Strategist
+category: strategy
+description: Writes creative briefs for ad redesigns.
+impl: wots.employees.impl.creative_strategist:CreativeStrategist
+task_kinds: [ad_brief]
+default_model: strong
+tools: [filesystem]
+config_schema: {}
+risk_level: low
+plans: [pro, agency]
+est_credits_per_task: 10
+status: available
+uses_llm: true              # the budget guard pauses employees that call Claude

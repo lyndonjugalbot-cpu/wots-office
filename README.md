@@ -1,18 +1,19 @@
 # Wots Office
 
-An AI-agent office that finds small businesses, produces work for them on spec (a website, or refreshed social ads) and pitches that work by email. The CEO approves everything before it leaves the building.
+An AI-employee office that finds small businesses, produces work for them on spec (a website, or refreshed social ads) and pitches that work by email. The CEO approves everything before it leaves the building.
 
-The full build spec is in [docs/SPEC.md](docs/SPEC.md). It is built phase by phase, and each phase must pass its acceptance criteria before the next starts.
+Since spec v2 it is multi-tenant: every piece of data belongs to an **office**. Our own agency is the internal office "Wots Office" (`wots-office`), and later phases open the same platform to customers. The build spec is [docs/SPEC.md](docs/SPEC.md) (v1 is kept in `docs/SPEC_v1.md`). The v1 → v2 migration is described in [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md).
 
 | Phase | What | Status |
 |---|---|---|
-| 0 | Skeleton: config, DB + migrations, state tables, board, Atlas (leases, WIP, fixes, retries, budget guard), events, CLI, DRY_RUN | **Done** |
-| 1 | Website pipeline: CSV import → Ledger → Quill → Iris (text logo) → Pixel/Nova → Hawk → approval queue | **Done**: acceptance test passes (49 tests in all) |
-| 2 | Next. Real leads: Scout, Places API, Companies House, ABN Lookup, country rules | |
-| 3 | Assets & previews: Iris, Dock (Vercel, noindex) | |
-| 4 | Outreach (manual send): Echo, suppression, pitch queue | |
-| 5 | Ad Refresh scope | |
-| 6 | Hardening: costs dashboard, follow-ups, retention, metrics | |
+| 0 | Multi-tenant core: offices, users, roles, employee catalogue, workflows as YAML, org-scoped data with a query guard, FileStore, job queue, metering + credits, v1 migration | **Done** |
+| 1 | Website workflow: CSV → Scout (pass-through) → Ledger → Quill → Iris → Pixel/Nova → Hawk → CEO approval | **Done**: acceptance test passes on v2 |
+| 2 | Real leads: Google Places research; verification (dedupe, no-website checks, Companies House, ABN Lookup, country rules) | **Built:** OpenStreetMap + Companies House (free). Needs the free Companies House / ABN keys; the scraper waits for its format |
+| 3 | Next. Assets & previews (Dock) | |
+| 4 | Outreach, manual send (Echo; needs the outreach terms) | |
+| 5 | Ad Refresh workflow | |
+| 6 | Hardening + HR / Team Manager | |
+| 7–9 | SaaS foundations, customer app & billing, catalogue growth | |
 
 ## Quick start
 
@@ -24,94 +25,165 @@ uv pip install --python .venv/bin/python -e ".[dev]"
 .venv/bin/python -m playwright install chromium     # Hawk's browser
 (cd tools && npm install)                           # Lighthouse
 (cd frontend && npm install && npm run build)       # the 3D office dashboard
-cp .env.example .env                                # add ANTHROPIC_API_KEY (and ANTHROPIC_WORKSPACE_ID if your key needs one)
+cp .env.example .env                                # ANTHROPIC_API_KEY, SECRETS_KEY, WOTS_OWNER_EMAIL...
 
-.venv/bin/wots run            # Atlas every 30s + dashboard at http://127.0.0.1:8000
+bin/wots run                  # Atlas every 30s + worker threads + dashboard on http://127.0.0.1:8000
 ```
 
-Then open http://127.0.0.1:8000, click **Load 4 sample leads** (or upload a CSV), and watch the office work. Click your own desk, or **Approvals**, to review sites. Other commands: `wots import-leads leads.csv --scope website`, `wots status`, `wots tick`.
+`wots run` prints a **sign-in link**. Open it to get a 12-hour session; if you lose it, `bin/wots login-link` makes a new one (valid for 10 minutes). Then click **Load 4 sample leads** (or upload a CSV) and watch the office work. Click your own desk, or **Approvals**, to review sites.
 
-The database is created and migrated automatically (`data/wots.db`). A lead CSV needs `business_name` and `country` (US, UK/GB or AU). Optional columns: `category`, `description`, `region`, `timezone`, `address`, `phone`, `email`, `contact_name`, `website_found`, `source_ref`.
+The database is created and migrated automatically (`data/wots.db`). A fresh database starts with the internal office, its owner/CEO (from `WOTS_OWNER_EMAIL`), and the team from the `web_agency` and `ad_agency` templates.
 
-**Safety defaults:** `DRY_RUN=true` and `auto_send: false`. In dry-run mode nothing is sent or deployed, notifications go to `data/outbox/notifications.log`, and LLM spend is capped at `dry_run_llm_cap_usd` ($1/day). Every site carries `noindex`.
+**Safety defaults:** `DRY_RUN=true` and `auto_send: false`. In dry-run mode nothing is sent or deployed, notifications go to `data/outbox/{office}/notifications.log`, and LLM spend is capped at $1/day per office. Every site carries `noindex`.
 
-For frontend development: run `wots run` and `cd frontend && npm run dev`, then open http://localhost:5173. The dev server proxies `/api` to port 8000.
+### Commands
 
-## The website pipeline (Phase 1)
+```bash
+bin/wots status [--org wots-office]
+bin/wots tick [--org wots-office]
+bin/wots import-leads leads.csv --org wots-office --workflow website
+bin/wots orgs create "Kiwi Web Co" --template web_agency --ceo boss@kiwi.test
+bin/wots orgs list
+bin/wots orgs accept-outreach-terms --org wots-office --postal-address "..."
+bin/wots employees list --org wots-office
+bin/wots employees hire --org wots-office --type web_developer --name Ada --config style_profile=minimal
+bin/wots employees fire --org wots-office --name Ada
+bin/wots workflows validate
+bin/wots login-link [--email someone@example.com]
+bin/wots research --country AU --trade hairdresser --regions "Geelong,Ballarat" --limit 50
+bin/wots research --country UK --trade plumber --regions Manchester --source companies_house
+bin/wots integrations connect --org some-customer --kind companies_house     # a customer office's own key
+```
 
-| Agent | What it does | Uses Claude? |
-|---|---|---|
-| Ledger | Enriches: local timezone, phone in the country's format, tidy email. (Verification is Phase 2.) | No |
-| Quill | Writes `copy.json` in local spelling. Never invents facts, and lists any services it had to assume, which the CEO sees at approval. | Yes (strong model) |
-| Iris | Brand palette plus a text logo, darkened until white text passes WCAG AA. (Real design is Phase 3.) | No |
-| Pixel / Nova | Build the site from `templates/sites/` (5 category templates) in their style profile. On CEO notes or proofread issues they revise the copy with Claude; mechanical QA failures just get a clean rebuild. | Only to act on feedback |
-| Hawk | Checks the page at 375, 768 and 1440 px: console errors, broken links and images, contact details matching the lead exactly, placeholder text, noindex, Lighthouse (a11y ≥ 90, perf ≥ 80, SEO ≥ 80, ignoring noindex), and a proofread. Any high issue sends the site back. | Proofread only (fast model) |
+A lead CSV needs `business_name` and `country` (US, UK/GB or AU). The optional columns are `category`, `description`, `region`, `timezone`, `address`, `phone`, `email`, `contact_name`, `website_found` and `source_ref`.
 
-The **approval queue** shows:
-- a live preview you can switch between 375, 768 and 1440 px
-- Hawk's screenshots, Lighthouse scores and issues
-- Quill's assumptions
-- Approve, Reject (your notes go to the designer) and Disqualify
-
-The **Escalated** tab offers "send back to the designer", "retry where it stopped" and "drop".
-
-If the Claude key or workspace is wrong, Atlas pauses the Claude-using agents, tells you once, and leaves the leads where they are instead of escalating them all.
+For frontend development: run `wots run` and `cd frontend && npm run dev`, then open http://localhost:5173. The dev server proxies `/api` and `/auth` to port 8000.
 
 ## How it fits together
 
-- **The board is the source of truth** (`wots/core/board.py`). Every lead is one row with a status. `board.transition()` checks the scope's table in `wots/core/states.py` and writes an `events` row for every change.
-- **Atlas is plain Python** (`wots/core/atlas.py`). Each tick, in order:
-  1. **Budget guard:** pause LLM agents once today's spend reaches the cap, and notify the CEO once.
-  2. **Fix routing:** send a `NEEDS_FIX` lead back to the same designer with the latest QA report or CEO notes. At `fix_count` 3 it's `ESCALATED`.
-  3. **Assignment:**
-     - `batch` WIP mode gives a designer new work only when all its leads are approved.
-     - `rolling` mode refills as soon as it's below `max_wip`.
-     - When several designers are free, the one with fewer leads this week gets the work.
-  4. **Dispatch:** each enabled agent claims leads with a lease. A crashed run's lead is freed when the lease expires. Failures back off exponentially (30s, 60s, 120s) and escalate after 3 retries.
-- **Agents** implement `run(lead, ctx) -> AgentResult` and never change status themselves (`wots/agents/base.py`). They're switched on in `config/agents.yaml` as each phase lands. Pixel/Nova and Iris/Juno share one class each, so another designer is just a config entry.
-- **Every LLM call is costed** into `llm_usage` (`wots/core/llm.py`) using the prices in `config/settings.yaml`. "Today" is the CEO's day in Auckland.
+- **Offices and roles** (`wots/core/offices.py`, `context.py`):
+  - Members are `owner`, `ceo` (exactly one per office), `manager` or `viewer`.
+  - Human gates (approve, reject, escalations) need the CEO, or a manager the CEO delegated approvals to.
+  - Hiring and firing need the CEO or owner.
+- **Tenant isolation** (`wots/core/repo.py`):
+  - Every tenant table has `org_id`, and code reads through `scoped()` / `one_or_404()`.
+  - A session-wide query guard raises `TenancyViolation` on any query of a tenant table that doesn't filter by `org_id`.
+  - Deliberate cross-office reads say so with `execution_options(cross_org=True)`.
+- **Employees** are hired instances of a catalogue type:
+  - Each type is a YAML file in `wots/employees/types/` (config schema, default model, risk level) with an implementation in `wots/employees/impl/`.
+  - Pixel and Nova are two `web_developer` hires with different `style_profile`s.
+  - An employee returns an `EmployeeResult`; it never changes an item's status itself.
+  - Types built in later phases can be hired now. They wait at their desk.
+- **Workflows are data** (`wots/workflows/*.yaml`): states with owners (`type`, `assign`, `assigned`, `gate`, `system`, `terminal`), transitions, WIP rules and the fix loop.
+  - They're validated on load: reachability, exits, and that each `assign` state has exactly one next state.
+  - They're also validated when an office activates them. For example, "The website workflow needs a QA Tester… Hire one or pick a different template."
+- **Atlas** (`wots/orchestration/atlas.py`) is plain Python driven by the YAML. Each tick visits every office in turn, with a per-office job cap. For each office:
+  1. **Budget and credits guard:** pause the employees that use Claude, and tell the CEO once.
+  2. **Fix loop:** an item entering `NEEDS_FIX` for the 3rd time goes to `ESCALATED` instead.
+  3. **Skip:** skip states whose type isn't hired and that are marked `skip_if_missing`.
+  4. **Assignment:** assign within WIP limits.
+     - `batch` mode takes new work only when everything current is done.
+     - `rolling` mode refills as soon as there's a free slot.
+     - Ties go to whoever had fewer items this week.
+  5. **Dispatch:** claim items with a lease and queue a job. Failures back off 30s, 60s, then 120s, and escalate after 3 retries.
+- **Files** live in `data/orgs/{org_id}/items/{item_id}/` behind `FileStore`, which refuses paths that escape the folder.
+- **Metering** (`wots/core/metering.py`):
+  - Every Claude call becomes a `usage_events` row, attributed to its office, employee and item, with a cost in USD and credits.
+  - Customer offices also get a `credit_ledger` debit and pause at zero credits. The internal office is unlimited.
+  - Model aliases and prices live in `config/models.yaml`.
+- **Dashboard auth** (`wots/core/auth.py`):
+  - HMAC-signed login links and session cookies.
+  - The browser picks the office with the `X-Org` header.
+  - Site previews use signed per-item file links, because sandboxed iframes send no cookie.
+
+## Finding leads (Phase 2)
+
+**Research:** `bin/wots research --country UK --trade hairdresser --regions "Manchester,Leeds"`, or **Find leads** in the dashboard's intake bar. The office's Lead Researcher searches a free source for a trade (`config/trades.yaml`) in each town. It skips businesses with a real website listed and ones already on the board, and puts the rest on the board at `NEW`.
+
+| Source | Countries | Good for | Notes |
+|---|---|---|---|
+| **OpenStreetMap** (default) | US, UK, AU | Shopfront businesses: hairdressers, beauty salons, cafés, bakeries, florists, mechanics | Free, no key. Credit "© OpenStreetMap contributors". Tradespeople are barely mapped: a live check found 0 plumbers in Manchester. Only about 1 in 8 has a phone number, and almost none has an email. |
+| **Companies House** | UK | Tradespeople and anyone else, by trade code (SIC) | Free; needs `COMPANIES_HOUSE_KEY`. Every hit is an active limited company, which is exactly who UK rules let us email. You get the registered address (often the accountant's) and no phone. |
+| Google Places | US, UK, AU | | **Off.** Google's terms (Maps Platform ToS 3.2.3) forbid saving business names and addresses, which a lead list needs. Scraping the Google Maps website is also against its terms. The code stays behind `research.places_enabled` in case Google agrees otherwise. |
+| Our scraper | internal office only | | Behind `internal_scraper_enabled`, waiting for its input/output format. |
+
+Every request is recorded in `usage_events` and capped per office per day, because the OpenStreetMap servers are free community servers. If the main Overpass server is busy, research retries on a backup.
+
+**Verification:** Ledger checks each lead in this order, and the first failure disqualifies it with a reason you can see in the lead's detail:
+1. **Duplicate:** it's the same business as an earlier lead in this office (same name plus the same phone or postcode, or the same Places record).
+2. **Already has a website:** Google lists a real site (a Facebook or Instagram page doesn't count), or a likely domain such as `joesplumbing.co.uk` shows their name or phone. Parked domains and other companies' sites don't count.
+3. **UK, Companies House:** the business must be an active ltd, plc or llp. No match means it's probably a sole trader or partnership, which UK rules don't let us cold-email, so it's dropped.
+4. **AU, ABN Lookup:** a cancelled ABN is dropped. No match is kept, since not every trading name is registered.
+5. **Country rules:** the entity type must be contactable (`config/countries/*.yaml`).
+
+**Keys:** add these free keys to `.env` for the internal office.
+- `COMPANIES_HOUSE_KEY`: from developer.company-information.service.gov.uk.
+- `ABN_GUID`: from abr.business.gov.au, Tools, Web services.
+
+A missing or rejected key pauses only the work that needs it. Atlas tells you once a day, and the leads wait instead of failing.
+
+**The existing scraper** is internal-only, behind the office setting `internal_scraper_enabled`, as the spec requires. It needs the scraper's input/output format before it can be wired in.
+
+## Tuning cost
+
+Each employee's `model` and `effort` are part of their hire config: `bin/wots employees hire … --config effort=low`, or `update_employee`. To try settings on the 4 sample leads without touching the real office:
+
+```bash
+bin/wots trial opus-default
+bin/wots trial sonnet-low --set Quill.model=claude-sonnet-5 --set Quill.effort=low
+bin/wots compare opus-default sonnet-low      # writes data/trials/compare.html
+```
+
+Each trial runs the real pipeline (real Claude, browser and Lighthouse) in its own database under `data/trials/`, and reports the billed cost per lead. **Trials spend real credits.**
 
 ## Where the spec needed an interpretation
 
-These are small calls I made where the spec was silent or two sections pulled in different directions. They're easy to change:
-
-1. **Extra transitions** (documented at the top of `states.py`):
-   - `READY_FOR_APPROVAL → DISQUALIFIED`, for the approval queue's Disqualify button.
-   - `ad_refresh` gets the same escalation exits and `PITCHED → LOST` as `website`.
-   - Any working status can go to `ESCALATED` after retries run out.
-   - The CEO can resume an error escalation at the status it came from.
-2. **Fix count:** Atlas increments `fix_count` when routing a fix, and escalates when it reaches 3. So the third QA failure escalates.
-3. **Retries:** 3 retries after the first failure (4 attempts in total), then escalate.
-4. **CEO send-back:** sending an escalated lead back resets `fix_count` to 0, so it gets a fresh set of fix attempts.
-5. **Agent config:** agents declare `owns: {scope: status}` instead of a single `owns_status`, because Iris, Echo and Ledger work different statuses in each scope. Agent results can also carry `updates`, which Ledger needs for enrichment.
+1. **Echo (Outreach Specialist) isn't hired yet.** High-risk types need the owner to accept the outreach terms first (spec §11).
+   - The website workflow runs without Echo: `allow_missing: [cold_email]` is recorded with the reason, and items will wait at `PREVIEW_DEPLOYED`.
+   - Run `wots orgs accept-outreach-terms`, then hire Echo.
+2. **Start hop:** an `assigned` state with exactly one move into another `assigned` state is the "start work" step. So `ASSIGNED` and `NEEDS_FIX` both go to `BUILDING` when the developer picks the item up.
+3. **Implicit escalation:** any employee-owned state may go to the workflow's `escalate_to` when retries run out. The CEO can resume an error escalation where it stopped, but not into `NEEDS_FIX` itself, and a send-back resets `fix_count`.
+4. **Leads start at `NEW`,** which the lead researcher owns. Research runs create them there, and Scout passes each one, including CSV imports, on to `VERIFY`.
+6. **UK leads with no Companies House match are dropped.** A limited company must be registered, so no match most likely means a sole trader or partnership. If a trading name differs from the registered name we lose a lead, which is the safe way round.
+7. **Research skips businesses whose listing shows a real website.** Ledger still checks likely domains for the rest.
+8. **Google Places is off** because of its terms (see Finding leads). The spec asked for it; we switched it off after reading Google's terms.
+5. **Dashboard:** it's still the 3D office (React + Three.js) on a JSON API, not HTMX, as agreed for v1. Local sign-in is a signed link; Supabase Auth replaces it in Phase 7.
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q            # all 123, about 2 minutes
+.venv/bin/python -m pytest -q -m "not e2e"   # skip the browser/Lighthouse runs
 ```
 
-They use a real SQLite database per test (migrated with Alembic), a fake clock, and fake agents or a scripted Claude, so they never call the real API or cost anything. The Phase 1 acceptance test (`pytest -m e2e`, about a minute) runs the real agents, browser and Lighthouse. They cover:
-- every allowed and blocked transition in both scopes
-- batch vs rolling WIP, the even split, and WIP never going above 2
-- fix routing and escalation
-- lease expiry and crashed agents
-- retry backoff
-- the budget guard and LLM costing
-- dry-run notifications
-- migrations matching the models
+Each test gets a real SQLite database (migrated with Alembic, so it starts with the internal office), a fake clock, fake employees or a scripted Claude, and a fake internet (`tests/fakeweb.py`: Places, Companies House, ABN Lookup, websites). Tests can never reach a real API. Coverage:
+- every allowed and blocked transition from both YAML workflows
+- broken workflow definitions are refused
+- activation fails when a type is missing
+- batch vs rolling WIP and the even split
+- the fix loop escalates on the 3rd failure
+- leases, retries and backoff
+- `skip_if_missing`
+- per-office job caps and round-robin
+- the budget guard, credits and LLM costing
+- a second office can't read or change the first office's items, files, employees or suppression list
+- unscoped queries fail
+- roles at the gates
+- the dashboard API and office switching
+- the v1 → v2 migration
 - the CLI
-- the dashboard API
+- Phase 2: research paging, metering and the daily cap, and the scraper being internal-only
+- Phase 2 verification: 50 leads per country, with UK sole traders, real-domain businesses, cancelled ABNs and duplicates dropped with reasons
 - Phase 1 acceptance: 4 sample leads reach APPROVED, a broken site is caught and fixed, a CEO rejection is revised, and WIP never goes above 2
 
 ## Troubleshooting
 
-**`ModuleNotFoundError: No module named 'wots'` from `.venv/bin/wots`:** macOS (often iCloud Documents sync) can mark files in `.venv` as hidden, and Python 3.12 then skips the editable install's `.pth` file. Fix it with:
-
-```bash
-chflags -R nohidden .venv
-```
+**`ModuleNotFoundError: No module named 'wots'` from `.venv/bin/wots`:** macOS (often iCloud Documents sync) can mark files in `.venv` as hidden, and Python 3.12 then skips the editable install's `.pth` file. Use `bin/wots`, or fix it with `chflags -R nohidden .venv`.
 
 ## The 3D office
 
-`frontend/` (React + Three.js) is the dashboard: a Sims-style office where each agent sits at a desk. Monitors glow and status gems change colour with the live pipeline, speech bubbles say who is working on which business, and the whiteboard shows the pipeline counts. It replaced the spec's suggested HTMX pages, which was a deliberate choice. All the data comes from the FastAPI JSON API in `wots/dashboard/app.py`, so an HTMX version could sit on the same API later.
+`frontend/` (React + Three.js) is the dashboard. It's a Sims-style office with a desk for each employee:
+- Monitors and status gems follow the live pipeline, and speech bubbles say who is working on what.
+- Idle staff wander to the water cooler.
+- Switch offices from the top bar. The Team tab lists the hires and lets the CEO hire or let people go.
+- The approval queue previews each site at 375, 768 and 1440 px, next to the QA screenshots, Lighthouse scores and the copywriter's assumptions.

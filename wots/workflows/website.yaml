@@ -1,0 +1,58 @@
+# Website workflow (spec v2 §6). Atlas executes this; there is no pipeline logic in code.
+key: website
+version: 1
+work_item_kind: lead
+initial: NEW
+states:
+  NEW:                {owner: {type: lead_researcher}, note: "created by lead researcher run"}
+  VERIFY:             {owner: {type: data_verifier}}
+  ENRICHED:           {owner: {type: copywriter}}
+  COPY_READY:         {owner: {type: graphic_designer}, task: website_assets, skip_if_missing: true, skip_to: ASSETS_READY}
+  ASSETS_READY:       {owner: {assign: web_developer}}
+  ASSIGNED:           {owner: assigned}
+  BUILDING:           {owner: assigned}
+  IN_QA:              {owner: {type: qa_tester}}
+  NEEDS_FIX:          {owner: assigned}
+  READY_FOR_APPROVAL: {owner: {gate: ceo}}
+  APPROVED:           {owner: {type: deployment}}
+  PREVIEW_DEPLOYED:   {owner: {type: cold_email}, task: draft_pitch}
+  PITCH_DRAFTED:      {owner: {gate: ceo}}
+  PITCH_APPROVED:     {owner: {type: cold_email}, task: send_pitch}
+  PITCHED:            {owner: system}      # follow-up timer
+  REPLIED:            {owner: {gate: ceo}}
+  ESCALATED:          {owner: {gate: ceo}}
+  WON: terminal
+  LOST: terminal
+  DISQUALIFIED: terminal
+transitions:
+  - [NEW, VERIFY]
+  - [VERIFY, ENRICHED]
+  - [VERIFY, DISQUALIFIED]
+  - [ENRICHED, COPY_READY]
+  - [COPY_READY, ASSETS_READY]
+  - [ASSETS_READY, ASSIGNED]
+  - [ASSIGNED, BUILDING]
+  - [BUILDING, IN_QA]
+  - [IN_QA, READY_FOR_APPROVAL]
+  - [IN_QA, NEEDS_FIX]
+  - [NEEDS_FIX, BUILDING]
+  - [NEEDS_FIX, ESCALATED]
+  - [READY_FOR_APPROVAL, APPROVED]
+  - [READY_FOR_APPROVAL, NEEDS_FIX]
+  - [READY_FOR_APPROVAL, DISQUALIFIED]
+  - [APPROVED, PREVIEW_DEPLOYED]
+  - [PREVIEW_DEPLOYED, PITCH_DRAFTED]
+  - [PITCH_DRAFTED, PITCH_APPROVED]
+  - [PITCH_DRAFTED, PREVIEW_DEPLOYED]     # rejected -> redraft
+  - [PITCH_APPROVED, PITCHED]
+  - [PITCHED, REPLIED]
+  - [PITCHED, LOST]
+  - [REPLIED, WON]
+  - [REPLIED, LOST]
+  - [ESCALATED, BUILDING]
+  - [ESCALATED, DISQUALIFIED]
+rules:
+  wip:
+    web_developer: {active_states: [ASSIGNED, BUILDING, IN_QA, NEEDS_FIX, READY_FOR_APPROVAL, ESCALATED]}
+  fix_loop: {counter_on: NEEDS_FIX, max: 3, escalate_to: ESCALATED}
+  followup: {after_days: 5, max_followups: 1, then: LOST}

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Runs the wots CLI from this repo. Doesn't rely on the editable-install .pth file, which
+# macOS sometimes marks hidden (Python 3.12 then ignores it).
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" exec "$REPO/.venv/bin/python" -m wots "$@"

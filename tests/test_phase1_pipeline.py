@@ -1,10 +1,10 @@
-"""Phase 1 acceptance (spec §12):
+"""Phase 1 acceptance (spec v1 §12, kept in v2 §16):
   4 sample leads flow to APPROVED; a deliberately broken site gets NEEDS_FIX, is fixed and
-  re-passes; designers never exceed WIP 2. Also: a CEO rejection with notes is revised and re-passes.
+  re-passes; developers never exceed WIP 2. Also: a CEO rejection with notes is revised and re-passes.
 
-Everything is real (Ledger, Iris, Pixel, Nova, Hawk with Playwright and Lighthouse) except
-Claude, which is replaced by a scripted client so the test is free and repeatable.
-Run just this with: pytest -m e2e
+Everything is real (the migrated internal office's Scout, Ledger, Quill, Iris/Juno, Pixel, Nova and
+Hawk with Playwright and Lighthouse) except Claude, which is replaced by a scripted client so the
+test is free and repeatable. Run just this with: pytest -m e2e
 """
 import json
 import shutil
@@ -14,15 +14,16 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import func, select
 
-from wots.agents.base import load_agents
-from wots.agents.web_designer import WebDesigner
 from wots.core import cli
-from wots.core.models import Event, Lead, QAReport
-from wots.core.states import ACTIVE_STATUSES
+from wots.core.models import Event, QAReport, WorkItem
 from wots.dashboard.actions import approve_build, reject_build
+from wots.employees.impl.web_developer import WebDeveloper
+
+from .conftest import as_user, employee_id, internal
 
 pytestmark = pytest.mark.e2e
 SAMPLES = Path(__file__).resolve().parents[1] / "samples" / "phase1_leads.csv"
+ACTIVE = ["ASSIGNED", "BUILDING", "IN_QA", "NEEDS_FIX", "READY_FOR_APPROVAL", "ESCALATED"]
 
 
 class ScriptedClaude:
@@ -35,7 +36,7 @@ class ScriptedClaude:
 
     def create(self, **kw):
         self.calls += 1
-        if kw["system"].startswith("You are Quill"):
+        if "the copywriter" in kw["system"]:
             record = json.loads(kw["messages"][0]["content"].split("\n", 1)[1])
             name = record["business_name"]
             body = {
@@ -60,94 +61,92 @@ class ScriptedClaude:
                                usage=SimpleNamespace(input_tokens=500, output_tokens=300), stop_reason="end_turn")
 
 
-class FaultyOnceDesigner(WebDesigner):
+class FaultyOnceDeveloper(WebDeveloper):
     """Ships a broken first build for one lead: a TODO left in and the wrong phone number."""
 
-    def __init__(self, config, target: str):
-        super().__init__(config)
+    def __init__(self, info, target: str):
+        super().__init__(info)
         self.target = target
         self.broke = False
 
-    def run(self, lead, ctx):
-        result = super().run(lead, ctx)
+    def run(self, lead, task, ctx):
+        result = super().run(lead, task, ctx)
         if lead.business_name == self.target and not self.broke:
             self.broke = True
-            page = ctx.lead_dir / "site" / "index.html"
+            page = ctx.item_dir / "site" / "index.html"
             html = page.read_text().replace(lead.phone, "555 000 0000").replace("</main>", "<p>TODO: opening hours</p></main>")
             page.write_text(html)
         return result
 
 
-def active_counts(rt):
+def active_counts(rt, ctx):
     with rt.sessions() as s:
-        return {d: s.scalar(select(func.count()).select_from(Lead).where(
-            Lead.assigned_to == d, Lead.status.in_([st.value for st in ACTIVE_STATUSES]))) for d in ("pixel", "nova")}
+        return {name: s.scalar(select(func.count()).select_from(WorkItem).where(
+            WorkItem.org_id == ctx.org_id, WorkItem.assigned_employee_id == employee_id(rt, ctx, name),
+            WorkItem.status.in_(ACTIVE))) for name in ("Pixel", "Nova")}
 
 
-def test_four_sample_leads_reach_approved_with_one_fix_loop(make_runtime, tmp_path, monkeypatch, clock, capsys):
+def test_four_sample_leads_reach_approved_with_one_fix_loop(make_runtime, clock, capsys):
     if not shutil.which("node"):
         pytest.skip("Node is needed for Lighthouse")
-    from wots.core.config import load_config
-
-    config = load_config()
-    agents = load_agents(config)
-    assert set(agents) == {"ledger", "quill", "iris", "pixel", "nova", "hawk"}
-    agents["pixel"] = FaultyOnceDesigner(config.agents.agents["pixel"], "Northgate Bookkeeping")
-    agents["nova"] = FaultyOnceDesigner(config.agents.agents["nova"], "Northgate Bookkeeping")
-    for agent in agents.values():  # FakeAgent-style test agents are keyed by name
-        agent.name = agent.config.name
-
-    rt = make_runtime(list(agents.values()), qa={"check_external_links": False})
     claude = ScriptedClaude()
-    rt.llm._client = claude
+    rt = make_runtime(fakes=False, llm_client=claude, qa={"check_external_links": False})
+    ctx = internal(rt)
+    staff = {st.info.name: st for st in rt.atlas.staff(ctx)}
+    for name in ("Pixel", "Nova"):
+        rt.atlas.impl_overrides[staff[name].info.id] = FaultyOnceDeveloper(staff[name].info, "Northgate Bookkeeping")
+    ceo = as_user(rt, ctx)
 
     # Import the sample CSV exactly as `wots import-leads` does
-    assert cli.cmd_import_leads(rt, SimpleNamespace(csv=str(SAMPLES), scope="website")) == 0
+    assert cli.cmd_import_leads(rt, SimpleNamespace(csv=str(SAMPLES), org="wots-office", workflow="website")) == 0
     assert "Imported 4 lead(s)" in capsys.readouterr().out
 
     saw_needs_fix = rejected = False
     for _ in range(20):
         rt.atlas.tick()
-        assert all(n <= 2 for n in active_counts(rt).values()), active_counts(rt)
+        assert all(n <= 2 for n in active_counts(rt, ctx).values()), active_counts(rt, ctx)
+        items = rt.board.items(ctx)
         with rt.sessions() as s:
-            statuses = dict(s.execute(select(Lead.business_name, Lead.status)).all())
-            waiting = list(s.scalars(select(Lead.id).where(Lead.status == "READY_FOR_APPROVAL")))
-            saw_needs_fix |= bool(s.scalar(select(func.count()).select_from(Event).where(Event.to_status == "NEEDS_FIX")))
-        for lead_id in waiting:  # the CEO approves what Hawk passed, but sends one back with notes first
-            if rt.board.get(lead_id).business_name == "Harbour Line Plumbing" and not rejected:
-                reject_build(rt.board, lead_id, "Please mention Portland in the headline")
+            saw_needs_fix |= bool(s.scalar(select(func.count()).select_from(Event).where(
+                Event.org_id == ctx.org_id, Event.to_status == "NEEDS_FIX")))
+        for item in [i for i in items if i.status == "READY_FOR_APPROVAL"]:
+            # The CEO approves what Hawk passed, but sends one back with notes first
+            if item.business_name == "Harbour Line Plumbing" and not rejected:
+                reject_build(rt.board, ceo, item.id, "Please mention Portland in the headline")
                 rejected = True
             else:
-                approve_build(rt.board, lead_id)
-        if all(v == "APPROVED" for v in statuses.values()) and len(statuses) == 4:
+                approve_build(rt.board, ceo, item.id)
+        if len(items) == 4 and all(i.status == "APPROVED" for i in rt.board.items(ctx)):
             break
         clock.advance(seconds=30)
 
-    with rt.sessions() as s:
-        final = dict(s.execute(select(Lead.business_name, Lead.status)).all())
-        broken = s.scalars(select(Lead).where(Lead.business_name == "Northgate Bookkeeping")).one()
-        reports = list(s.scalars(select(QAReport).where(QAReport.lead_id == broken.id).order_by(QAReport.id)))
-        path = list(s.scalars(select(Event.to_status).where(Event.lead_id == broken.id).order_by(Event.id)))
-
-    assert set(final.values()) == {"APPROVED"}, final
+    final = {i.business_name: i for i in rt.board.items(ctx)}
+    assert {i.status for i in final.values()} == {"APPROVED"}, {k: v.status for k, v in final.items()}
     assert saw_needs_fix
-    # The broken build failed QA for the right reasons, went back to the same designer, and re-passed
+    broken = final["Northgate Bookkeeping"]
+    with rt.sessions() as s:
+        reports = list(s.scalars(select(QAReport).where(QAReport.org_id == ctx.org_id, QAReport.work_item_id == broken.id)
+                                 .order_by(QAReport.created_at)))
+    path = [e.to_status for e in rt.board.history(ctx, broken.id)]
+    # The broken build failed QA for the right reasons, went back to the same developer, and re-passed
     assert [r.passed for r in reports] == [False, True]
     problems = " ".join(i["description"] for i in reports[0].issues)
     assert "todo" in problems.lower() and "phone" in problems.lower()
-    assert path[path.index("NEEDS_FIX"):path.index("NEEDS_FIX") + 4] == ["NEEDS_FIX", "BUILDING", "IN_QA", "READY_FOR_APPROVAL"]
+    i = path.index("NEEDS_FIX")
+    assert path[i:i + 4] == ["NEEDS_FIX", "BUILDING", "IN_QA", "READY_FOR_APPROVAL"]
     assert broken.fix_count == 1
 
     # Every approved site kept its noindex tag, the lead's real details and screenshots at all 3 widths
-    lead_root = rt.config.settings.data_path / "leads"
-    for lead_dir in lead_root.iterdir():
-        html = (lead_dir / "site" / "index.html").read_text()
+    for item in final.values():
+        folder = rt.files.item_dir(ctx.org_id, item.id, create=False)
+        html = (folder / "site" / "index.html").read_text()
         assert 'content="noindex' in html
-        assert {p.name for p in (lead_dir / "qa" / "screens").iterdir()} == {"375.png", "768.png", "1440.png"}
-        report = json.loads((lead_dir / "qa" / "qa_report.json").read_text())
+        assert {p.name for p in (folder / "qa" / "screens").iterdir()} == {"375.png", "768.png", "1440.png"}
+        report = json.loads((folder / "qa" / "qa_report.json").read_text())
         scores = report["lighthouse"]["scores"]
         assert scores["accessibility"] >= 90 and scores["performance"] >= 80 and scores["seo"] >= 80, scores
-    # The CEO's notes reached the designer, who revised the copy with Claude and rebuilt
-    harbour = next(d for d in lead_root.iterdir() if "Harbour Line" in (d / "site" / "index.html").read_text())
+    # The CEO's notes reached the developer, who revised the copy with Claude and rebuilt
+    harbour = rt.files.item_dir(ctx.org_id, final["Harbour Line Plumbing"].id, create=False)
     assert "(revised)" in (harbour / "site" / "index.html").read_text()
-    assert claude.calls >= 10  # Quill x4, designer revision x1, Hawk proofread x6
+    assert claude.calls >= 10  # Quill x4, a developer revision x1, Hawk proofreads x6
+    assert rt.meter.spend_today(ctx) > 0

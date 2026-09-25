@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import type { OfficeAgent } from "../types";
 import { Desk } from "./Desk";
 import { LabelProjector } from "./labels";
-import { deskLayout } from "./layout";
+import { deskLayout, walkMap } from "./layout";
 import { Room } from "./Room";
 import { Worker } from "./Worker";
 
@@ -19,6 +19,7 @@ interface Props {
 
 export function Scene({ agents, board, selected, onSelect, retro, autoRotate }: Props) {
   const { spots, frontZ } = deskLayout(agents);
+  const map = walkMap(spots, frontZ);
   const centerZ = (frontZ - 6) / 2;
 
   return (
@@ -56,7 +57,6 @@ export function Scene({ agents, board, selected, onSelect, retro, autoRotate }: 
         shadow-bias={-0.0005}
       />
 
-      <LabelProjector />
       <FitZoom depth={frontZ + 6} />
       <Room frontZ={frontZ} board={board} />
 
@@ -66,10 +66,12 @@ export function Scene({ agents, board, selected, onSelect, retro, autoRotate }: 
         return (
           <group key={member.id} position={spot.position}>
             <Desk status={member.status} big={spot.big} />
-            <Worker member={member} selected={selected === member.id} onSelect={onSelect} />
+            <Worker member={member} home={spot.position} map={map} selected={selected === member.id} onSelect={onSelect} />
           </group>
         );
       })}
+      {/* After the workers, so labels use the positions they set this frame */}
+      <LabelProjector />
     </Canvas>
   );
 }

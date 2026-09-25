@@ -1,0 +1,15 @@
+key: deployment
+version: 1
+display_name: Deployment Specialist
+category: operations
+description: Publishes private, noindexed previews with the office's own Vercel integration, and tears them down.
+impl: wots.employees.impl.deployment:Deployment
+task_kinds: [deploy_preview, teardown_preview]
+default_model: fast
+tools: [vercel]
+config_schema: {}
+risk_level: medium
+plans: [starter, pro, agency]
+est_credits_per_task: 2
+status: available
+uses_llm: false              # the budget guard pauses employees that call Claude

@@ -1,4 +1,5 @@
-# Global settings. Env vars override: DRY_RUN, DATABASE_URL, NOTIFY_WEBHOOK.
+# Platform defaults. Offices can override some per org (organizations.settings).
+# Env vars override: DRY_RUN, DATABASE_URL, WOTS_DATA_DIR, NOTIFY_WEBHOOK. Models/prices: models.yaml.
 
 # true = no external sends, no deploys, and LLM spend capped at dry_run_llm_cap_usd (spec §2.6)
 dry_run: true
@@ -12,6 +13,8 @@ timezone: Pacific/Auckland
 
 atlas:
   tick_seconds: 30
+  max_jobs_per_org_per_tick: 10   # per office, so one busy office can't starve the others
+  workers: 4                       # in-process job workers for `wots run`
   lease_seconds: 600            # a claim expires after this, releasing a crashed agent's lead
   max_retries: 3                # retries after the first failure, then ESCALATED
   retry_backoff_seconds: 30     # 30s, 60s, 120s ...
@@ -25,12 +28,6 @@ wip:
 budget:
   daily_llm_budget_usd: 5.00
   dry_run_llm_cap_usd: 1.00
-
-# Per million tokens, USD. Used to cost every call in llm_usage.
-model_pricing:
-  claude-opus-5: {input: 5.00, output: 25.00}
-  claude-sonnet-5: {input: 2.00, output: 10.00}
-  claude-haiku-4-5: {input: 1.00, output: 5.00}
 
 outreach:
   daily_send_cap: 20
@@ -49,3 +46,18 @@ qa:
   lighthouse: {accessibility: 90, performance: 80, seo: 80}   # SEO ignores noindex (spec §7)
   run_lighthouse: true
   check_external_links: true      # unreachable external links are reported as medium, not a fail
+
+research:
+  # Google Places is off: its terms don't allow saving business names/addresses (Maps Platform ToS 3.2.3)
+  places_enabled: false
+  places_cost_per_request_usd: 0.035   # Places Text Search incl. phone + website; check Google Cloud's current pricing
+  max_places_requests_per_day: 100     # per office; a 50-lead search usually needs 5-15 requests
+  page_size: 20
+  request_timeout_seconds: 10
+  website_check_timeout_seconds: 6
+  nominatim_url: https://nominatim.openstreetmap.org/search    # OpenStreetMap: finds the town
+  overpass_urls:                       # OpenStreetMap: finds businesses in a town (tried in turn when busy)
+    - https://overpass-api.de/api/interpreter
+    - https://overpass.private.coffee/api/interpreter
+  max_osm_requests_per_day: 200        # free public servers; keep use light
+  companies_house_page_size: 100       # UK company search by trade (SIC code)

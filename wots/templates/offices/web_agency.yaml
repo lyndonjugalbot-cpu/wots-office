@@ -1,0 +1,14 @@
+key: web_agency
+version: 1
+display_name: Web Agency
+workflows: [website]
+recommended_team:
+  - {type: lead_researcher, name: Scout}
+  - {type: data_verifier, name: Ledger}
+  - {type: copywriter, name: Quill}
+  - {type: graphic_designer, name: Iris}
+  - {type: web_developer, name: Pixel, config: {style_profile: clean_modern}}
+  - {type: web_developer, name: Nova, config: {style_profile: bold_warm}}
+  - {type: qa_tester, name: Hawk}
+  - {type: deployment, name: Dock}
+  - {type: cold_email, name: Echo}

@@ -1,0 +1,15 @@
+key: qa_tester
+version: 1
+display_name: QA Tester
+category: quality
+description: Tests websites and ad creatives in a real browser and writes QA reports.
+impl: wots.employees.impl.qa_tester:QATester
+task_kinds: [qa_website, qa_ads]
+default_model: fast
+tools: [browser, lighthouse]
+config_schema: {}
+risk_level: low
+plans: [starter, pro, agency]
+est_credits_per_task: 3
+status: available
+uses_llm: true              # the budget guard pauses employees that call Claude

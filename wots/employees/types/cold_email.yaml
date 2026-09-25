@@ -1,0 +1,15 @@
+key: cold_email
+version: 1
+display_name: Outreach Specialist
+category: outreach
+description: Drafts compliant pitch emails and, after approval, sends them from the office's own mailbox.
+impl: wots.employees.impl.cold_email:ColdEmail
+task_kinds: [draft_pitch, send_pitch]
+default_model: strong
+tools: [email]
+config_schema: {}
+risk_level: high
+plans: [pro, agency]
+est_credits_per_task: 10
+status: available
+uses_llm: true              # the budget guard pauses employees that call Claude

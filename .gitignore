@@ -15,3 +15,4 @@ tools/node_modules/
 # Secrets and OS files
 .env
 .DS_Store
+backups/

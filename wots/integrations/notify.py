@@ -1,36 +1,39 @@
-"""CEO notifications (spec §6.5): a Telegram or Discord webhook, or a local log file.
+"""Notifications when work reaches a human gate or escalates (spec v2 §7.8).
 
-In DRY_RUN mode, or with no webhook configured, messages go to data/outbox/notifications.log.
+In dry-run mode, or with no webhook, messages go to data/outbox/{org_id}/notifications.log.
+The platform webhook (NOTIFY_WEBHOOK) is only used for internal offices; customer offices will
+connect their own webhook integration (Phase 6+).
 """
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import httpx
 
 from ..core.clock import Clock, utcnow
+from ..core.context import OrgContext
+from ..core.files import FileStore
 
 log = logging.getLogger(__name__)
 
 
 class Notifier:
-    def __init__(self, webhook: str | None, dry_run: bool, outbox: Path, clock: Clock = utcnow):
+    def __init__(self, webhook: str | None, dry_run: bool, files: FileStore, clock: Clock = utcnow):
         self.webhook = webhook
         self.dry_run = dry_run
-        self.log_path = outbox / "notifications.log"
+        self.files = files
         self.clock = clock
-        self.sent: list[str] = []  # handy in tests and the dashboard
+        self.sent: list[tuple[str, str]] = []  # (org_id, text): handy in tests
 
-    def send(self, text: str, lead_id: int | None = None) -> None:
-        self.sent.append(text)
-        if self.dry_run or not self.webhook:
-            self.log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.log_path.open("a") as f:
+    def send(self, ctx: OrgContext, text: str) -> None:
+        self.sent.append((ctx.org_id, text))
+        webhook = self.webhook if ctx.is_internal else None
+        if self.dry_run or not webhook:
+            with (self.files.outbox(ctx.org_id) / "notifications.log").open("a") as f:
                 f.write(f"{self.clock().isoformat(timespec='seconds')}Z  {text}\n")
             return
         try:
             # "content" is Discord's field and "text" is Telegram's; each ignores the other
-            httpx.post(self.webhook, json={"content": text, "text": text}, timeout=10).raise_for_status()
+            httpx.post(webhook, json={"content": text, "text": text}, timeout=10).raise_for_status()
         except httpx.HTTPError as e:  # a notification failing must never stop the pipeline
-            log.warning("Notification failed for lead %s: %s", lead_id, e)
+            log.warning("Notification failed for %s: %s", ctx.slug, e)

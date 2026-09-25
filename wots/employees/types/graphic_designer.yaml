@@ -1,0 +1,18 @@
+key: graphic_designer
+version: 1
+display_name: Graphic Designer
+category: design
+description: Logos, hero images and ad variations (HTML/CSS rendered to PNG). Uses only real product photos.
+impl: wots.employees.impl.graphic_designer:GraphicDesigner
+task_kinds: [website_assets, ad_variations]
+default_model: strong
+tools: [filesystem, templates.ads, renderer]
+config_schema:
+  style_profile: {type: enum, values: [flat_brand, bold_playful, minimal], default: flat_brand}
+  max_wip: {type: int, default: 2, min: 1, max: 5}
+  wip_mode: {type: enum, values: [batch, rolling], default: batch}
+risk_level: low
+plans: [starter, pro, agency]
+est_credits_per_task: 15
+status: available
+uses_llm: false              # the budget guard pauses employees that call Claude

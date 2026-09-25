@@ -335,3 +335,23 @@ details summary { cursor: pointer; color: #2b59c3; }
   .queue__list { border-right: 0; border-bottom: 3px solid var(--line); }
   .facts { grid-template-columns: 1fr; }
 }
+
+/* ---------------------------------------------------------------- v2: sign-in, office switcher, team */
+.signin { min-height: 100%; display: grid; place-items: center; padding: 16px; }
+.signin__box { max-width: 460px; padding: 24px; font-size: 20px; }
+.signin__box h1 { font-family: var(--pixel); font-size: 16px; display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
+.signin__box code { background: var(--panel-2); padding: 0 4px; }
+.officepick {
+  font-family: var(--body); font-size: 18px; color: var(--ink); background: var(--panel-2);
+  border: 2px solid var(--line); padding: 0 6px; max-width: 180px;
+}
+.officepick--static { border-color: transparent; background: none; }
+.team { display: flex; flex-direction: column; gap: 10px; }
+.team__row { display: flex; justify-content: space-between; align-items: center; gap: 8px; border-bottom: 1px dashed var(--muted); padding: 4px 0; }
+.team__row small { display: block; }
+.team form { display: grid; gap: 6px; }
+.team form select, .team form input { font-family: var(--body); font-size: 18px; border: 2px solid var(--line); background: #fffaf0; padding: 2px 6px; }
+.soon { font-size: 14px; color: var(--muted); border: 1px solid var(--muted); padding: 0 4px; }
+.intake select, .intake input:not([type=file]) { font-family: var(--body); font-size: 18px; border: 2px solid var(--line); background: #fffaf0; padding: 2px 6px; min-width: 0; }
+.intake__count { width: 64px; }
+.checks { margin: 0; padding-left: 18px; }

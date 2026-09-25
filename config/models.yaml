@@ -1,0 +1,14 @@
+# Model aliases used by employee types (default_model) and employee overrides (spec v2 §4).
+# Open decision §17.7: confirm the aliases with the CEO.
+aliases:
+  fast: claude-haiku-4-5
+  strong: claude-opus-5
+
+# USD per million tokens. Every call is costed from this table; an unpriced model is refused.
+pricing:
+  claude-opus-5: {input: 5.00, output: 25.00}
+  claude-sonnet-5: {input: 2.00, output: 10.00}
+  claude-haiku-4-5: {input: 1.00, output: 5.00}
+
+# Models that don't accept the `effort` setting
+no_effort: [claude-haiku-4-5]

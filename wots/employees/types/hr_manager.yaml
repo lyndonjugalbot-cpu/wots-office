@@ -1,0 +1,15 @@
+key: hr_manager
+version: 1
+display_name: HR / Team Manager
+category: management
+description: Manages the AI team only (never humans) - onboarding checklists, weekly performance reports, staffing suggestions.
+impl: wots.employees.impl.hr_manager:HRManager
+task_kinds: [onboarding_check, weekly_report]
+default_model: fast
+tools: []
+config_schema: {}
+risk_level: low
+plans: [pro, agency]
+est_credits_per_task: 5
+status: available
+uses_llm: true              # the budget guard pauses employees that call Claude

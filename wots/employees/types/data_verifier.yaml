@@ -1,0 +1,15 @@
+key: data_verifier
+version: 1
+display_name: Data Verifier
+category: research
+description: Verifies, dedupes and enriches leads, and applies the country rules.
+impl: wots.employees.impl.data_verifier:DataVerifier
+task_kinds: [verify_lead]
+default_model: fast
+tools: [dns, companies_house, abn_lookup]
+config_schema: {}
+risk_level: low
+plans: [starter, pro, agency]
+est_credits_per_task: 2
+status: available
+uses_llm: false              # the budget guard pauses employees that call Claude

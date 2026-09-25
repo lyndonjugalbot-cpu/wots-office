@@ -1,0 +1,4 @@
+# Credits are the platform currency (spec v2 §10). Open decision §17.9: confirm the value.
+credit_value_usd: 0.01
+# Phases 0-6: metering only. Internal offices never run out of credits (their daily LLM budget still applies).
+internal_unlimited_credits: true

@@ -1,0 +1,55 @@
+# Ad Refresh workflow (spec v2 §6). Transitions mirror the website workflow, without
+# COPY_READY / ASSETS_READY / deployment.
+key: ad_refresh
+version: 1
+work_item_kind: lead
+initial: NEW
+states:
+  NEW:                {owner: {type: ad_researcher}}
+  VERIFY:             {owner: {type: data_verifier}}
+  ENRICHED:           {owner: {type: creative_strategist}}
+  BRIEFED:            {owner: {assign: graphic_designer}}
+  ASSIGNED:           {owner: assigned}
+  DESIGNING:          {owner: assigned}
+  IN_QA:              {owner: {type: qa_tester}}
+  NEEDS_FIX:          {owner: assigned}
+  READY_FOR_APPROVAL: {owner: {gate: ceo}}
+  APPROVED:           {owner: {type: cold_email}, task: draft_pitch}
+  PITCH_DRAFTED:      {owner: {gate: ceo}}
+  PITCH_APPROVED:     {owner: {type: cold_email}, task: send_pitch}
+  PITCHED:            {owner: system}
+  REPLIED:            {owner: {gate: ceo}}
+  ESCALATED:          {owner: {gate: ceo}}
+  WON: terminal
+  LOST: terminal
+  DISQUALIFIED: terminal
+transitions:
+  - [NEW, VERIFY]
+  - [VERIFY, ENRICHED]
+  - [VERIFY, DISQUALIFIED]
+  - [ENRICHED, BRIEFED]
+  - [BRIEFED, ASSIGNED]
+  - [ASSIGNED, DESIGNING]
+  - [DESIGNING, IN_QA]
+  - [IN_QA, READY_FOR_APPROVAL]
+  - [IN_QA, NEEDS_FIX]
+  - [NEEDS_FIX, DESIGNING]
+  - [NEEDS_FIX, ESCALATED]
+  - [READY_FOR_APPROVAL, APPROVED]
+  - [READY_FOR_APPROVAL, NEEDS_FIX]
+  - [READY_FOR_APPROVAL, DISQUALIFIED]
+  - [APPROVED, PITCH_DRAFTED]
+  - [PITCH_DRAFTED, PITCH_APPROVED]
+  - [PITCH_DRAFTED, APPROVED]             # rejected -> redraft
+  - [PITCH_APPROVED, PITCHED]
+  - [PITCHED, REPLIED]
+  - [PITCHED, LOST]
+  - [REPLIED, WON]
+  - [REPLIED, LOST]
+  - [ESCALATED, DESIGNING]
+  - [ESCALATED, DISQUALIFIED]
+rules:
+  wip:
+    graphic_designer: {active_states: [ASSIGNED, DESIGNING, IN_QA, NEEDS_FIX, READY_FOR_APPROVAL, ESCALATED]}
+  fix_loop: {counter_on: NEEDS_FIX, max: 3, escalate_to: ESCALATED}
+  followup: {after_days: 5, max_followups: 1, then: LOST}

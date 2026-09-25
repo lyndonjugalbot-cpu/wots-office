@@ -1,0 +1,15 @@
+key: copywriter
+version: 1
+display_name: Copywriter
+category: writing
+description: Writes website, ad and email copy in local spelling. Never invents facts.
+impl: wots.employees.impl.copywriter:Copywriter
+task_kinds: [website_copy]
+default_model: strong
+tools: []
+config_schema: {}
+risk_level: low
+plans: [starter, pro, agency]
+est_credits_per_task: 8
+status: available
+uses_llm: true              # the budget guard pauses employees that call Claude

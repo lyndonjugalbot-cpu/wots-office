@@ -1,81 +1,174 @@
-"""Dashboard API: approval queue actions, escalations, file serving and intake (spec §10)."""
+"""The dashboard API (spec v2 §12): sign-in, office scoping, roles at the gates, files and intake."""
 import pytest
 from fastapi.testclient import TestClient
 
+from wots.core import auth
 from wots.dashboard.app import create_app
+from wots.employees.base import EmployeeResult
 
-from .conftest import force_status, new_lead
+from .conftest import employee_id, fake_team, force_status, internal, new_item
+
+
+def signed_in(rt, email=None):
+    client = TestClient(create_app(rt))
+    url = auth.login_link(rt, email, "http://testserver")
+    response = client.get(url.replace("http://testserver", ""), follow_redirects=False)
+    assert response.status_code == 303 and auth.COOKIE in response.cookies
+    return client
 
 
 @pytest.fixture
-def client_rt(make_runtime):
-    rt = make_runtime()
-    return TestClient(create_app(rt)), rt
+def rt(make_runtime):
+    return make_runtime()
 
 
-def test_overview_counts_and_pending(client_rt):
-    client, rt = client_rt
-    a, b = new_lead(rt), new_lead(rt, name="B")
-    force_status(rt, a, "READY_FOR_APPROVAL")
-    force_status(rt, b, "ESCALATED")
-    data = client.get("/api/overview").json()
-    assert data["pending"] == {"approvals": 1, "escalations": 1}
-    assert data["counts"]["website"] == {"READY_FOR_APPROVAL": 1, "ESCALATED": 1}
-    assert data["dry_run"] is True and data["spend_cap"] == 1.0
-    ceo = next(p for p in client.get("/api/office").json()["agents"] if p["id"] == "ceo")
-    assert ceo["status"] == "waiting" and "2 items" in ceo["bubble"]
+def test_everything_needs_sign_in(rt):
+    client = TestClient(create_app(rt))
+    for path in ("/api/me", "/api/overview", "/api/items", "/api/office", "/api/team"):
+        assert client.get(path).status_code == 401
+    assert client.get("/auth/login?token=forged.abc", follow_redirects=False).status_code == 401
+    session = auth.session_cookie(rt, auth.default_user_id(rt))
+    assert client.get("/auth/login", params={"token": session}, follow_redirects=False).status_code == 401  # wrong purpose
 
 
-def test_approve_reject_and_disqualify(client_rt):
-    client, rt = client_rt
-    ids = [new_lead(rt, name=f"L{i}") for i in range(3)]
-    for i in ids:
-        force_status(rt, i, "READY_FOR_APPROVAL", assigned_to="pixel")
-
-    assert client.post(f"/api/leads/{ids[0]}/approve", json={}).json()["status"] == "APPROVED"
-    assert client.post(f"/api/leads/{ids[1]}/reject", json={"notes": ""}).status_code == 409  # notes required
-    assert client.post(f"/api/leads/{ids[1]}/reject", json={"notes": "Use their green"}).json()["status"] == "NEEDS_FIX"
-    assert rt.board.latest_feedback(ids[1]) == "CEO notes: Use their green"
-    out = client.post(f"/api/leads/{ids[2]}/disqualify", json={"reason": "has a website after all"}).json()
-    assert out["status"] == "DISQUALIFIED" and out["disqualify_reason"] == "has a website after all"
-    # Approving twice isn't allowed
-    assert client.post(f"/api/leads/{ids[0]}/approve", json={}).status_code == 409
-    detail = client.get(f"/api/leads/{ids[1]}").json()
-    assert detail["approvals"][0]["decision"] == "rejected" and detail["events"][-1]["to"] == "NEEDS_FIX"
+def test_me_overview_and_office(rt):
+    client = signed_in(rt)
+    me = client.get("/api/me").json()
+    assert [o["slug"] for o in me["offices"]] == ["wots-office"] and set(me["offices"][0]["roles"]) == {"owner", "ceo"}
+    new_item(rt)
+    overview = client.get("/api/overview").json()
+    assert overview["counts"] == {"website": {"NEW": 1}} and overview["credits"] is None
+    assert {w["key"]: w["waiting_for"] for w in overview["workflows"]}["website"] == ["cold_email"]
+    people = client.get("/api/office").json()["agents"]
+    kinds = {p["name"]: p["kind"] for p in people}
+    assert kinds["Atlas"] == "atlas" and kinds["Hawk"] == "qa" and kinds["Pixel"] == "worker"
+    assert next(p for p in people if p["kind"] == "ceo")["name"]
 
 
-def test_escalation_offers_resume_and_send_back(client_rt):
-    client, rt = client_rt
-    errored = new_lead(rt)
-    rt.board.transition(errored, "ESCALATED", "atlas", "quill failed 4 times")
-    assert client.get(f"/api/leads/{errored}").json()["resume_status"] == "NEW"
-    assert client.post(f"/api/leads/{errored}/resolve", json={"to_status": "NEW"}).json()["status"] == "NEW"
-
-    fixes = new_lead(rt, name="Fix loop")
-    force_status(rt, fixes, "NEEDS_FIX", assigned_to="nova", fix_count=3)
-    rt.board.transition(fixes, "ESCALATED", "atlas")
-    assert client.get(f"/api/leads/{fixes}").json()["resume_status"] is None
-    out = client.post(f"/api/leads/{fixes}/resolve", json={"to_status": "BUILDING", "notes": "Simpler hero"}).json()
-    assert out["status"] == "BUILDING" and out["fix_count"] == 0
-
-
-def test_files_are_served_sandboxed_and_cannot_escape(client_rt):
-    client, rt = client_rt
-    lead_id = new_lead(rt)
-    site = rt.config.settings.data_path / "leads" / str(lead_id) / "site"
-    site.mkdir(parents=True)
-    (site / "index.html").write_text("<h1>Hi</h1>")
-    r = client.get(f"/api/leads/{lead_id}/files/site/index.html")
-    assert r.status_code == 200 and "sandbox" in r.headers["content-security-policy"]
-    for sneaky in ("../../wots.db", "%2e%2e/%2e%2e/wots.db", "site/../../../wots.db"):
-        r = client.get(f"/api/leads/{lead_id}/files/{sneaky}")
-        assert r.status_code in (404, 422) and b"SQLite" not in r.content  # never serves the database
+def test_approve_reject_and_disqualify(rt):
+    client = signed_in(rt)
+    ctx = internal(rt)
+    a, b, c = (new_item(rt, name=n) for n in ("A", "B", "C"))
+    for item in (a, b, c):
+        force_status(rt, ctx, item, "READY_FOR_APPROVAL", assigned_employee_id=employee_id(rt, ctx, "Pixel"))
+    assert client.post(f"/api/items/{a}/approve", json={}).json()["status"] == "APPROVED"
+    assert client.post(f"/api/items/{a}/approve", json={}).status_code == 409  # already decided
+    assert client.post(f"/api/items/{b}/reject", json={"notes": ""}).status_code == 409
+    rejected = client.post(f"/api/items/{b}/reject", json={"notes": "Mention Portland"}).json()
+    assert rejected["status"] == "NEEDS_FIX" and rejected["fix_count"] == 1 and rejected["assigned_to"] == "Pixel"
+    assert rt.board.latest_feedback(ctx, b) == "CEO notes: Mention Portland"
+    assert client.post(f"/api/items/{c}/disqualify", json={"reason": "closed down"}).json()["status"] == "DISQUALIFIED"
+    detail = client.get(f"/api/items/{a}").json()
+    assert detail["approvals"][0]["decision"] == "approved" and detail["events"][-1]["actor"] == "You"
 
 
-def test_csv_upload_and_samples(client_rt):
-    client, rt = client_rt
-    csv = b"business_name,country\nA Plumber,US\nKiwi Ltd,NZ\n"
-    out = client.post("/api/import", files={"file": ("x.csv", csv, "text/csv")}, data={"scope": "website"}).json()
-    assert out["created"] == 1 and "NZ" in out["skipped"][0]
+def test_escalations_offer_resume_and_send_back(rt):
+    client = signed_in(rt)
+    ctx = internal(rt)
+    item = new_item(rt)
+    force_status(rt, ctx, item, "ENRICHED")
+    rt.board.transition(ctx, item, "ESCALATED", "system", "atlas", "Quill failed 4 times")
+    detail = client.get(f"/api/items/{item}").json()
+    assert detail["resume_status"] == "ENRICHED" and detail["can_decide"]
+    assert client.post(f"/api/items/{item}/resolve", json={"to_status": "IN_QA"}).status_code == 409
+    assert client.post(f"/api/items/{item}/resolve", json={"to_status": "ENRICHED"}).json()["status"] == "ENRICHED"
+
+
+def test_viewers_cant_decide_and_other_offices_cant_see(rt):
+    ctx = internal(rt)
+    viewer = rt.offices.ensure_user("viewer@wots.test")
+    rt.offices.add_member(ctx, viewer.id, "viewer")
+    item = new_item(rt)
+    force_status(rt, ctx, item, "READY_FOR_APPROVAL")
+    client = signed_in(rt, "viewer@wots.test")
+    assert client.get(f"/api/items/{item}").json()["can_decide"] is False
+    assert client.post(f"/api/items/{item}/approve", json={}).status_code == 403
+    assert client.post("/api/import-samples").status_code == 403
+    assert client.post("/api/team/hire", json={"type": "web_developer", "name": "Ada"}).status_code == 403
+
+    rival = rt.offices.create_office("Rival", templates=["web_agency"], ceo_email="ceo@rival.test")
+    fake_team(rt, rival)
+    theirs = signed_in(rt, "ceo@rival.test")
+    assert theirs.get(f"/api/items/{item}").status_code == 404
+    assert theirs.post(f"/api/items/{item}/approve", json={}).status_code == 404
+    assert theirs.get("/api/items").json() == []
+    assert theirs.get("/api/overview", headers={"X-Org": "wots-office"}).status_code == 403
+    assert theirs.get(f"/api/items/{item}/files/copy.json").status_code == 404
+
+
+def test_the_office_switcher(rt):
+    ctx = internal(rt)
+    owner = auth.default_user_id(rt)
+    second = rt.offices.create_office("Second", templates=["ad_agency"], ceo_email="lead@second.test")
+    rt.offices.add_member(second, owner, "manager")
+    new_item(rt, ctx=second, workflow="ad_refresh")
+    client = signed_in(rt)
+    assert {o["slug"] for o in client.get("/api/me").json()["offices"]} == {"wots-office", "second"}
+    assert client.get("/api/items", headers={"X-Org": "second"}).json()[0]["workflow_key"] == "ad_refresh"
+    assert client.get("/api/items").json() == []  # the default office is the first membership
+    assert ctx.slug == "wots-office"
+
+
+def test_files_are_served_sandboxed_and_cannot_escape(rt):
+    client = signed_in(rt)
+    ctx = internal(rt)
+    item = new_item(rt)
+    site = rt.files.item_dir(ctx.org_id, item) / "site"
+    site.mkdir()
+    (site / "index.html").write_text("<h1>hi</h1>")
+    response = client.get(f"/api/items/{item}/files/site/index.html")
+    assert response.status_code == 200 and "sandbox" in response.headers["content-security-policy"]
+    assert client.get(f"/api/items/{item}/files/../../../../wots.db").status_code == 404
+    assert client.get(f"/api/items/{item}/files/%2e%2e/%2e%2e/secret").status_code == 404
+    base = client.get(f"/api/items/{item}").json()["files_base"]
+    anonymous = TestClient(create_app(rt))  # a sandboxed preview sends no cookie
+    assert anonymous.get(base + "site/index.html").status_code == 200
+    assert anonymous.get(base + "../../wots.db").status_code == 404
+    assert anonymous.get(base.replace("/api/files/", "/api/files/x") + "site/index.html").status_code == 404
+    forged = auth.sign(rt, {"purpose": "session", "uid": "x", "exp": 9999999999})
+    assert anonymous.get(f"/api/files/{forged}/site/index.html").status_code == 404
+
+
+def test_csv_upload_samples_and_team(rt):
+    client = signed_in(rt)
+    upload = client.post("/api/import", files={"file": ("x.csv", b"business_name,country\nJoe,US\n,US\n")},
+                         data={"workflow": "website"})
+    assert upload.json() == {"created": 1, "skipped": ["line 3: no business_name"]}
     assert client.post("/api/import-samples").json()["created"] == 4
-    assert len(client.get("/api/leads?status=NEW").json()) == 5
+    assert client.post("/api/import", files={"file": ("x.csv", b"name\nJoe\n")}).status_code == 400
+
+    team = client.get("/api/team").json()
+    assert team["can_manage"] and "Pixel" in {m["name"] for m in team["members"]}
+    assert client.post("/api/team/hire", json={"type": "web_developer", "name": "Ada",
+                                               "config": {"style_profile": "playful"}}).status_code == 200
+    assert client.post("/api/team/hire", json={"type": "cold_email", "name": "Echo"}).status_code == 400
+    ada = next(m for m in client.get("/api/team").json()["members"] if m["name"] == "Ada")
+    assert client.post(f"/api/team/{ada['id']}/fire").json() == {"ok": True}
+
+
+def test_tick_runs_only_the_current_office(rt):
+    client = signed_in(rt)
+    rival = rt.offices.create_office("Rival", templates=["web_agency"], ceo_email="ceo@rival.test")
+    fake_team(rt, rival)
+    scout = rt.atlas.impl_overrides[employee_id(rt, rival, "Scout")]
+    scout.behaviour = lambda item, ctx: EmployeeResult("VERIFY")
+    theirs = new_item(rt, ctx=rival)
+    assert client.post("/api/tick").json()["ran"]
+    assert rt.board.get(rival, theirs).status == "NEW"  # the signed-in office was ticked, not the rival
+    rt.atlas.tick("rival")
+    assert rt.board.get(rival, theirs).status == "VERIFY"
+
+
+def test_research_from_the_dashboard(rt, web):
+    from .fakeweb import osm_element
+
+    web.osm["portland"] = [osm_element(i, f"Portland Pipes {i}") for i in range(5)]
+    client = signed_in(rt)
+    trades = client.get("/api/trades").json()
+    assert {"key": "plumber", "label": "Plumbers", "uk_registry": True} in trades["trades"]
+    body = {"country": "US", "trade": "plumber", "regions": ["Portland"], "limit": 3}
+    result = client.post("/api/research", json=body).json()
+    assert result["created"] == 3 and result["requests"] == 2
+    assert client.get("/api/overview").json()["research"]["osm"]["requests_today"] == 2
+    assert client.post("/api/research", json={**body, "country": "NZ"}).status_code == 400
+    assert client.post("/api/research", json={**body, "source": "places"}).status_code == 400  # switched off

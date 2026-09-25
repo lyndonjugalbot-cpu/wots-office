@@ -1,0 +1,18 @@
+key: web_developer
+version: 1
+display_name: Web Developer
+category: design
+description: Builds responsive single-page business websites from copy and brand assets.
+impl: wots.employees.impl.web_developer:WebDeveloper
+task_kinds: [build_website, fix_website]
+default_model: strong          # alias resolved in config/models.yaml
+tools: [filesystem, templates.sites]
+config_schema:                  # what an office can set when hiring
+  style_profile: {type: enum, values: [clean_modern, bold_warm, minimal, playful], default: clean_modern}
+  max_wip: {type: int, default: 2, min: 1, max: 5}
+  wip_mode: {type: enum, values: [batch, rolling], default: batch}
+risk_level: low                 # low | medium | high (high = needs terms acceptance)
+plans: [starter, pro, agency]
+est_credits_per_task: 40
+status: available               # available | beta | planned
+uses_llm: true              # the budget guard pauses employees that call Claude

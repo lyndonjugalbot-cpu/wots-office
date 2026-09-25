@@ -1,283 +1,416 @@
-# Wots Office — Build Spec
+# Wots Office — Build Spec v2 (multi-tenant ready)
 
-> Hand this file to Claude Code (save it as `docs/SPEC.md` in a new repo) and ask it to build **Phase 0** first. Each phase has acceptance criteria. Do not start a phase until the previous one passes.
+> **For Claude Code:** This replaces `docs/SPEC.md` (v1). Save it as `docs/SPEC.md`, keep v1 as `docs/SPEC_v1.md` for reference.
+> **Before changing any code:** inspect the repo, report which v1 phases/parts are already built, then follow §15 (Migration from v1) to refactor what exists. Then continue with the phase plan in §16. Do not start a phase until the previous one's acceptance criteria pass.
 
-## 1. What we're building
+---
 
-Wots Office is an AI-agent "office" that finds small businesses, produces work for them on spec, and pitches that work by email. The CEO (Lyndon) approves everything before it leaves the building.
+## 0. What changed from v1
 
-There are two scopes (pipelines) that share one task board, one orchestrator, one QA agent, one approval dashboard and one outreach agent:
+| v1 | v2 |
+|---|---|
+| One office (ours), agents hard-coded | Many **offices** (tenants). Ours is org #1, "Wots Office" |
+| Agents like Pixel/Hawk are fixed classes wired into pipelines | **Employee types** (templates) in a registry; offices **hire employees** (instances) of those types |
+| States hard-coded in `states.py` per scope | **Workflows as data** (YAML). Atlas reads the workflow; no pipeline logic in code |
+| `leads` table is the work item | Generic **`work_items`** table + typed detail tables (`lead_profiles`, …) |
+| CEO = Lyndon | **Members** with roles (owner, ceo, manager, viewer). The CEO role holds approval gates |
+| Local only | Local first, but every table has `org_id`, secrets are per org, and a SaaS layer (auth, billing, onboarding UI) comes in Phases 7–8 |
 
-| Scope | Target | What we make | Pitch |
-|---|---|---|---|
-| `website` | Businesses with **no website** | A ready-made website | "We built you a site — here's the preview" |
-| `ad_refresh` | Small businesses **running social ads** with weak creative | 2–3 redesigned ad variations | "Fresh variations you could A/B test" |
+Our own agency keeps working exactly as designed in v1 — it's now just the first office running two **office templates** (Web Agency, Ad Agency).
 
-Target countries (v1): **US, UK, AU**. NZ is excluded as a target, but NZ law still applies to us as the sender (see §9).
+---
+
+## 1. Product vision
+
+**Phase A (now): Wots Office, our agency.** AI employees find small businesses in the US/UK/AU, build websites or redesign ads on spec, and pitch them by email. The CEO approves everything before it leaves.
+
+**Phase B (later): Wots Office as a SaaS.** Companies subscribe, name their office, choose who is CEO, pick an office template, and hire AI employees from a catalogue (graphic designer, web developer, copywriter, lead researcher, cold email specialist, QA tester, content creator, HR/team manager, …).
+
+We build Phase A on the Phase B data model so there's no rewrite later.
+
+---
 
 ## 2. Design principles
 
-1. **One source of truth.** Agents never pass files to each other. Every lead is a row on the board with a `status`. Each agent only picks up leads in the status it owns and moves them forward.
-2. **Atlas (the orchestrator) is plain Python, not an LLM.** Routing, assignment, limits and escalation must be deterministic and testable. LLMs do the creative and extraction work inside agents.
-3. **Humans gate anything external.** Nothing is deployed publicly or emailed without CEO approval. `auto_send` is `false` by default and stays that way until Phase 6.
-4. **Everything is logged.** Every status change writes an `events` row (who, from, to, why).
-5. **Config over code.** Country rules, WIP limits, models, thresholds and daily caps live in YAML.
-6. **Dry-run first.** A global `DRY_RUN=true` mode means no external sends, no deploys and no paid API calls beyond a cap.
+1. **One source of truth.** Work items live on a board with a `status`. Employees only pick up items in states they own. No file passing.
+2. **Atlas (orchestrator) is deterministic Python, not an LLM.** Routing, assignment, WIP limits, retries and escalation are testable code driven by workflow YAML.
+3. **Tenant isolation everywhere.** Every row has `org_id`. All DB access goes through a repository layer that requires an `OrgContext`. No raw queries without `org_id`. (Postgres row-level security added in Phase 7.)
+4. **Humans gate anything external.** Nothing is deployed publicly or emailed without a CEO/manager approval. `auto_send=false` by default.
+5. **Config over code.** Employee types, workflows, office templates, country rules, plans and thresholds are data.
+6. **Everything is logged and metered.** Every status change → `events`. Every LLM call and billable action → `usage_events` (credits).
+7. **Dry-run mode.** `DRY_RUN=true` = no sends, no deploys, capped paid API usage.
 
-## 3. Tech stack
+---
 
-- **Language:** Python 3.12
-- **DB:** SQLite via SQLAlchemy 2.x + Alembic (designed so we can swap to Postgres later)
-- **LLM:** Anthropic Python SDK (Messages API). Model per agent set in `config/agents.yaml` — default a fast model for extraction/classification and a stronger model for copy, briefs and design.
-- **Browser automation / QA:** Playwright (Python)
-- **Performance/accessibility audits:** Lighthouse CLI (Node) called from Python
-- **Images:** ad creatives are built as HTML/CSS templates and rendered to PNG with Playwright at exact sizes; Pillow for crops/compositing
-- **Scheduler:** APScheduler (Atlas tick loop + timed email sends)
-- **Dashboard:** FastAPI + Jinja2 + HTMX (local only, `localhost`)
-- **Deploy previews:** Vercel CLI
-- **Email:** provider behind an interface (`EmailProvider`), dev implementation writes `.eml` files to `data/outbox/`. Real provider chosen in Phase 4 (see §12 open decisions).
-- **Notifications:** optional webhook (Telegram or Discord) when items hit the approval queue or get escalated
+## 3. Core concepts
 
-## 4. The team
+- **Organization (office):** a tenant. Has a name ("Wots Office"), plan, settings, members, employees, workflows, integrations.
+- **Member:** a human user in an office. Roles:
+  - `owner` — billing, integrations, can do everything
+  - `ceo` — approval gates, hire/fire employees, all work
+  - `manager` — approvals if the CEO delegates them, day-to-day work
+  - `viewer` — read-only
+  One person can be owner and CEO. An office has exactly one CEO at a time.
+- **Employee type:** a template in the platform catalogue (e.g. `web_developer`). Defines instructions, tools, task kinds it handles, default model, config schema, risk level, and which plans can hire it.
+- **Employee:** a hired instance of a type inside an office (e.g. "Pixel", a `web_developer` with style "clean & modern", `max_wip: 2`).
+- **Workflow:** a state machine (YAML) for one kind of work — which states exist, which employee type or human gate owns each state, allowed transitions, WIP and fix-loop rules.
+- **Office template:** a starter bundle = workflows + recommended employees. v2 ships `web_agency` and `ad_agency`; `content_studio` is planned.
+- **Work item:** one unit of work moving through a workflow (a lead to build a site for, an advertiser to redesign ads for, a content piece…).
 
-| Agent | Scope | Job | Reads status | Writes status |
+---
+
+## 4. Tech stack
+
+- **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.x + Alembic
+- **DB:** SQLite for local dev; **Postgres (Supabase)** from Phase 7. Write portable SQLAlchemy (no SQLite-only features).
+- **Jobs:** Atlas tick enqueues jobs; workers execute. Phase 0–6: in-process worker pool behind a `JobQueue` interface. Phase 7: swap to a real queue (Redis + RQ/Celery, or a Postgres-backed queue) without changing agent code.
+- **LLM:** Anthropic Python SDK (Messages API). Model per employee type, overridable per employee. Key in `.env` as `ANTHROPIC_API_KEY` (never committed).
+- **Browser automation / QA / rendering:** Playwright (Python); Lighthouse CLI; Pillow
+- **Internal dashboard (Phases 1–6):** FastAPI + Jinja2 + HTMX on localhost
+- **Customer web app (Phase 8):** Next.js on Vercel, talking to the FastAPI API
+- **Auth (Phase 7):** Supabase Auth (JWT verified by FastAPI)
+- **Billing (Phase 8):** Stripe subscriptions + metered credits
+- **Deploy previews:** Vercel CLI/API
+- **Email:** `EmailProvider` interface; dev implementation writes `.eml` to `data/outbox/{org_id}/`
+- **Secrets:** per-org integration secrets encrypted at rest (Fernet, key from `SECRETS_KEY` env)
+
+---
+
+## 5. Employee type registry
+
+Stored as files in `wots/employees/types/{key}.yaml` + a Python class per type in `wots/employees/impl/`. Loaded into the `employee_types` table on startup (versioned).
+
+```yaml
+# wots/employees/types/web_developer.yaml
+key: web_developer
+display_name: Web Developer
+category: design
+description: Builds responsive single-page business websites from copy and brand assets.
+impl: wots.employees.impl.web_developer:WebDeveloper
+task_kinds: [build_website, fix_website]
+default_model: strong          # alias resolved in config/models.yaml
+tools: [filesystem, templates.sites]
+config_schema:                  # what an office can set when hiring
+  style_profile: {type: enum, values: [clean_modern, bold_warm, minimal, playful], default: clean_modern}
+  max_wip: {type: int, default: 2, min: 1, max: 5}
+  wip_mode: {type: enum, values: [batch, rolling], default: batch}
+risk_level: low                 # low | medium | high (high = needs terms acceptance)
+plans: [starter, pro, agency]
+est_credits_per_task: 40
+status: available               # available | beta | planned
+```
+
+### v2 catalogue
+
+| Key | Display name | v1 name(s) | Does | Status |
 |---|---|---|---|---|
-| **Atlas** | both | Orchestrator: assigns work, enforces WIP limits, retries, escalates, schedules | all | assignment/escalation states |
-| **Scout** | website | Pulls leads from our existing scraper + Places API, filtered by country | — | `NEW` |
-| **Scout-Ads** | ad_refresh | Ingests advertisers from ad-library captures (manual intake in v1) | — | `NEW` |
-| **Ledger** | both | Verifies (no website / real + active business / entity type), dedupes, enriches contact details | `NEW` | `ENRICHED` or `DISQUALIFIED` |
-| **Quill** | website | Writes all site copy (headline, about, services, CTA) in local spelling | `ENRICHED` | `COPY_READY` |
-| **Lens** | ad_refresh | Analyses current ads, writes a creative brief | `ENRICHED` | `BRIEFED` |
-| **Iris** | both | Graphic designer: logo + hero for websites; ad variations for ad_refresh | `COPY_READY` / `ASSIGNED` (ads) | `ASSETS_READY` / `IN_QA` |
-| **Juno** | ad_refresh | Second graphic designer (different style profile) | `ASSIGNED` | `IN_QA` |
-| **Pixel** | website | Web designer — style profile "clean & modern" | `ASSIGNED` | `IN_QA` |
-| **Nova** | website | Web designer — style profile "bold & warm" | `ASSIGNED` | `IN_QA` |
-| **Hawk** | both | QA for websites and ad creatives | `IN_QA` | `READY_FOR_APPROVAL` or `NEEDS_FIX` |
-| **Dock** | website | Deploys approved sites to a private, noindexed Vercel preview | `APPROVED` | `PREVIEW_DEPLOYED` |
-| **Echo** | both | Drafts personalised pitch emails with per-country rules; sends after approval | `PREVIEW_DEPLOYED` / `APPROVED` (ads) | `PITCH_DRAFTED` → `PITCHED` |
-| **CEO** | both | Approves builds/designs and pitches in the dashboard | `READY_FOR_APPROVAL`, `PITCH_DRAFTED`, `ESCALATED` | `APPROVED`, `NEEDS_FIX`, `PITCH_APPROVED`, `DISQUALIFIED` |
+| `lead_researcher` | Lead Researcher | Scout | Finds businesses from approved sources (our scraper adapter, Google Places API) | available |
+| `ad_researcher` | Ad Researcher | Scout-Ads | Normalises manually captured ad-library entries into work items | available |
+| `data_verifier` | Data Verifier | Ledger | Verifies, dedupes, enriches, applies country rules | available |
+| `copywriter` | Copywriter | Quill | Website/ad/email copy in local spelling, no invented facts | available |
+| `creative_strategist` | Creative Strategist | Lens | Writes creative briefs for ad redesigns | available |
+| `graphic_designer` | Graphic Designer | Iris, Juno | Logos, hero images, ad variations (HTML/CSS → PNG) | available |
+| `web_developer` | Web Developer | Pixel, Nova | Builds static sites from templates + copy + assets | available |
+| `qa_tester` | QA Tester | Hawk | Tests websites and ad creatives, writes QA reports | available |
+| `deployment` | Deployment Specialist | Dock | Private noindexed previews, teardown | available |
+| `cold_email` | Outreach Specialist | Echo | Drafts and (after approval) sends compliant pitches | available, `risk_level: high` |
+| `hr_manager` | HR / Team Manager | — (new) | Manages the **AI team**: onboarding checklist for new hires, weekly performance reports, staffing suggestions | available (Phase 6) |
+| `content_creator` | Content Creator | — (new) | Social posts/captions + visuals from a brief | planned (Phase 9) |
+| `office_manager` | Office Manager | Atlas | **Not hireable.** Atlas is platform infrastructure in every office | — |
 
-Pixel/Nova share one `WebDesigner` class; Iris/Juno share one `GraphicDesigner` class. Instances differ only by name and style profile in `config/agents.yaml`. Adding a third designer should be a config change.
+Notes:
+- **HR / Team Manager does not screen or hire humans.** It manages AI employees only: tracks throughput, QA pass rate, fix loops, cost per task, and recommends changes ("Web Developer queue is 9 items deep — consider hiring a second one"). This avoids employment-law/bias risk.
+- **Customer-facing lead sourcing uses official APIs only** (e.g. Places API). Our private scraper adapter is enabled only for the internal Wots Office org via a feature flag (`internal_scraper_enabled`).
+- Employee types with `risk_level: high` (Outreach) can only be hired after the office owner accepts the outreach terms (§11).
 
-## 5. State machines
+---
 
-### 5.1 `website` scope
+## 6. Workflows as data
 
-```mermaid
-stateDiagram-v2
-    [*] --> NEW : Scout
-    NEW --> ENRICHED : Ledger (verified no website)
-    NEW --> DISQUALIFIED : Ledger (has site / closed / dupe / not contactable / fails country rule)
-    ENRICHED --> COPY_READY : Quill
-    COPY_READY --> ASSETS_READY : Iris (logo + hero)
-    ASSETS_READY --> ASSIGNED : Atlas (Pixel or Nova, respecting WIP)
-    ASSIGNED --> BUILDING : designer starts
-    BUILDING --> IN_QA : designer done
-    IN_QA --> READY_FOR_APPROVAL : Hawk pass
-    IN_QA --> NEEDS_FIX : Hawk fail
-    NEEDS_FIX --> BUILDING : same designer
-    NEEDS_FIX --> ESCALATED : fix_count >= 3
-    READY_FOR_APPROVAL --> APPROVED : CEO
-    READY_FOR_APPROVAL --> NEEDS_FIX : CEO rejects with notes
-    APPROVED --> PREVIEW_DEPLOYED : Dock
-    PREVIEW_DEPLOYED --> PITCH_DRAFTED : Echo
-    PITCH_DRAFTED --> PITCH_APPROVED : CEO
-    PITCH_APPROVED --> PITCHED : Echo (scheduled send)
-    PITCHED --> REPLIED
-    REPLIED --> WON
-    REPLIED --> LOST
-    PITCHED --> LOST : no reply after follow-up window
-    ESCALATED --> BUILDING : CEO sends back
-    ESCALATED --> DISQUALIFIED : CEO drops
+Stored in `wots/workflows/{key}.yaml`. An office activates workflows; Atlas executes them. `states.py` becomes a generic loader/validator.
+
+### State ownership kinds
+- `type: <employee_type>` — any employee of that type in the office may take it (Atlas picks one with capacity)
+- `assigned` — only the work item's `assigned_employee_id` may take it (used after assignment so fixes go back to the same designer)
+- `assign: <employee_type>` — Atlas assigns an employee of that type (WIP rules) and moves on
+- `gate: <role>` — waits for a human with that role (`ceo`, or `manager` if delegated)
+- `system` — handled by Atlas itself (e.g. timeouts)
+- `terminal`
+
+`skip_if_missing: true` on a state lets a workflow run when the office hasn't hired that type (e.g. no Graphic Designer → skip logo/hero).
+
+### Website workflow (`web_agency` template)
+
+```yaml
+key: website
+work_item_kind: lead
+initial: NEW
+states:
+  NEW:                {owner: {type: lead_researcher}, note: "created by lead researcher run"}
+  VERIFY:             {owner: {type: data_verifier}}
+  ENRICHED:           {owner: {type: copywriter}}
+  COPY_READY:         {owner: {type: graphic_designer}, task: website_assets, skip_if_missing: true, skip_to: ASSETS_READY}
+  ASSETS_READY:       {owner: {assign: web_developer}}
+  ASSIGNED:           {owner: assigned}
+  BUILDING:           {owner: assigned}
+  IN_QA:              {owner: {type: qa_tester}}
+  NEEDS_FIX:          {owner: assigned}
+  READY_FOR_APPROVAL: {owner: {gate: ceo}}
+  APPROVED:           {owner: {type: deployment}}
+  PREVIEW_DEPLOYED:   {owner: {type: cold_email}, task: draft_pitch}
+  PITCH_DRAFTED:      {owner: {gate: ceo}}
+  PITCH_APPROVED:     {owner: {type: cold_email}, task: send_pitch}
+  PITCHED:            {owner: system}      # follow-up timer
+  REPLIED:            {owner: {gate: ceo}}
+  ESCALATED:          {owner: {gate: ceo}}
+  WON: terminal
+  LOST: terminal
+  DISQUALIFIED: terminal
+transitions:
+  - [NEW, VERIFY]
+  - [VERIFY, ENRICHED]
+  - [VERIFY, DISQUALIFIED]
+  - [ENRICHED, COPY_READY]
+  - [COPY_READY, ASSETS_READY]
+  - [ASSETS_READY, ASSIGNED]
+  - [ASSIGNED, BUILDING]
+  - [BUILDING, IN_QA]
+  - [IN_QA, READY_FOR_APPROVAL]
+  - [IN_QA, NEEDS_FIX]
+  - [NEEDS_FIX, BUILDING]
+  - [NEEDS_FIX, ESCALATED]
+  - [READY_FOR_APPROVAL, APPROVED]
+  - [READY_FOR_APPROVAL, NEEDS_FIX]
+  - [READY_FOR_APPROVAL, DISQUALIFIED]
+  - [APPROVED, PREVIEW_DEPLOYED]
+  - [PREVIEW_DEPLOYED, PITCH_DRAFTED]
+  - [PITCH_DRAFTED, PITCH_APPROVED]
+  - [PITCH_DRAFTED, PREVIEW_DEPLOYED]     # rejected → redraft
+  - [PITCH_APPROVED, PITCHED]
+  - [PITCHED, REPLIED]
+  - [PITCHED, LOST]
+  - [REPLIED, WON]
+  - [REPLIED, LOST]
+  - [ESCALATED, BUILDING]
+  - [ESCALATED, DISQUALIFIED]
+rules:
+  wip:
+    web_developer: {active_states: [ASSIGNED, BUILDING, IN_QA, NEEDS_FIX, READY_FOR_APPROVAL, ESCALATED]}
+  fix_loop: {counter_on: NEEDS_FIX, max: 3, escalate_to: ESCALATED}
+  followup: {after_days: 5, max_followups: 1, then: LOST}
 ```
 
-### 5.2 `ad_refresh` scope
+(Note: v1's `NEW → ENRICHED` is now `NEW → VERIFY → ENRICHED` so verification is its own owned step.)
 
-```mermaid
-stateDiagram-v2
-    [*] --> NEW : Scout-Ads
-    NEW --> ENRICHED : Ledger (contact found)
-    NEW --> DISQUALIFIED : Ledger (big brand / no contact / fails country rule)
-    ENRICHED --> BRIEFED : Lens
-    BRIEFED --> ASSIGNED : Atlas (Iris or Juno, respecting WIP)
-    ASSIGNED --> DESIGNING
-    DESIGNING --> IN_QA
-    IN_QA --> READY_FOR_APPROVAL : Hawk pass
-    IN_QA --> NEEDS_FIX : Hawk fail
-    NEEDS_FIX --> DESIGNING
-    NEEDS_FIX --> ESCALATED : fix_count >= 3
-    READY_FOR_APPROVAL --> APPROVED : CEO
-    READY_FOR_APPROVAL --> NEEDS_FIX : CEO rejects with notes
-    APPROVED --> PITCH_DRAFTED : Echo
-    PITCH_DRAFTED --> PITCH_APPROVED : CEO
-    PITCH_APPROVED --> PITCHED : Echo
-    PITCHED --> REPLIED
-    REPLIED --> WON
-    REPLIED --> LOST
+### Ad Refresh workflow (`ad_agency` template)
+
+```yaml
+key: ad_refresh
+work_item_kind: lead
+initial: NEW
+states:
+  NEW:                {owner: {type: ad_researcher}}
+  VERIFY:             {owner: {type: data_verifier}}
+  ENRICHED:           {owner: {type: creative_strategist}}
+  BRIEFED:            {owner: {assign: graphic_designer}}
+  ASSIGNED:           {owner: assigned}
+  DESIGNING:          {owner: assigned}
+  IN_QA:              {owner: {type: qa_tester}}
+  NEEDS_FIX:          {owner: assigned}
+  READY_FOR_APPROVAL: {owner: {gate: ceo}}
+  APPROVED:           {owner: {type: cold_email}, task: draft_pitch}
+  PITCH_DRAFTED:      {owner: {gate: ceo}}
+  PITCH_APPROVED:     {owner: {type: cold_email}, task: send_pitch}
+  PITCHED:            {owner: system}
+  REPLIED:            {owner: {gate: ceo}}
+  ESCALATED:          {owner: {gate: ceo}}
+  WON: terminal
+  LOST: terminal
+  DISQUALIFIED: terminal
+# transitions mirror the website workflow (without COPY_READY/ASSETS_READY/deployment)
+rules:
+  wip:
+    graphic_designer: {active_states: [ASSIGNED, DESIGNING, IN_QA, NEEDS_FIX, READY_FOR_APPROVAL, ESCALATED]}
+  fix_loop: {counter_on: NEEDS_FIX, max: 3, escalate_to: ESCALATED}
+  followup: {after_days: 5, max_followups: 1, then: LOST}
 ```
 
-Allowed transitions live in `wots/core/states.py` as a table per scope. `board.transition(lead_id, to_status, actor, note)` rejects anything not in the table.
+### Workflow validation (on load and on office activation)
+- Every state reachable from `initial`; every non-terminal state has an outgoing transition
+- Every `type`/`assign` references a known employee type
+- Activation fails with a clear message if the office lacks a required employee type (unless `skip_if_missing`) — e.g. "Website workflow needs a QA Tester. Hire one or pick a different template."
 
-## 6. Atlas (orchestrator) logic
+### Office templates
 
-Atlas runs a tick every N seconds (config, default 30s). On each tick:
+```yaml
+# wots/templates/offices/web_agency.yaml
+key: web_agency
+display_name: Web Agency
+workflows: [website]
+recommended_team:
+  - {type: lead_researcher, name: Scout}
+  - {type: data_verifier, name: Ledger}
+  - {type: copywriter, name: Quill}
+  - {type: graphic_designer, name: Iris}
+  - {type: web_developer, name: Pixel, config: {style_profile: clean_modern}}
+  - {type: web_developer, name: Nova, config: {style_profile: bold_warm}}
+  - {type: qa_tester, name: Hawk}
+  - {type: deployment, name: Dock}
+  - {type: cold_email, name: Echo}
+```
 
-1. **Dispatch**: for each enabled agent, find leads in the status it owns that are unclaimed, claim up to the agent's batch size, and run the agent. Claims use a lease (`claimed_by`, `claim_expires_at`) so a crashed agent's work is released automatically.
-2. **Assignment with WIP limits**:
-   - Designers have `max_wip: 2`.
-   - `wip_mode: batch` (default, matches the CEO's rule): a designer gets new work only when **all** its current leads have reached `APPROVED` (or left the pipeline). With `wip_mode: rolling`, it gets a new lead whenever it has fewer than 2 active.
-   - Active = `ASSIGNED`, `BUILDING`/`DESIGNING`, `IN_QA`, `NEEDS_FIX`, `READY_FOR_APPROVAL`, `ESCALATED`.
-   - When both designers are free, assign to the one with fewer total leads this week (keeps the split even — this replaces "Ledger splits the list into two files").
-3. **Fix routing**: a lead in `NEEDS_FIX` always goes back to its `assigned_to` designer with the latest QA report or CEO notes attached. Increment `fix_count`. At `fix_count >= 3` move to `ESCALATED`.
-4. **Retries**: agent exceptions are retried with exponential backoff up to 3 times, then the lead goes to `ESCALATED` with the error in the note.
-5. **Notify**: when anything enters `READY_FOR_APPROVAL`, `PITCH_DRAFTED` or `ESCALATED`, send a webhook notification (if configured).
-6. **Budget guard**: if today's LLM spend exceeds `daily_llm_budget_usd`, pause all LLM agents and notify.
+`ad_agency` recommends Scout-Ads, Ledger, Lens, Iris, Juno, Hawk, Echo. Our internal office activates both templates (shared employees are hired once: Ledger, Iris, Hawk, Echo).
+
+---
+
+## 7. Atlas (orchestrator)
+
+Runs a tick every N seconds (default 30). **Per tick, per active office** (offices processed round-robin with a per-office concurrency cap so one busy tenant can't starve others):
+
+1. **Load** active workflows and hired, enabled employees for the office.
+2. **Assign**: for items in an `assign: <type>` state, pick an employee of that type with capacity:
+   - capacity = `max_wip` minus items in the workflow's `active_states` assigned to them
+   - `wip_mode: batch` → only gets new work when **all** its current items reached `APPROVED` or left the pipeline (matches the CEO's "2 at a time, then 2 more" rule)
+   - `wip_mode: rolling` → new work whenever below `max_wip`
+   - tie-break: fewest items assigned in the last 7 days
+   - sets `assigned_employee_id`, moves to next state
+3. **Dispatch**: for items in employee-owned states, claim with a lease (`claimed_by`, `claim_expires_at`) and enqueue a job for the right employee. `assigned` states only go to the assigned employee.
+4. **Fix routing**: entering `NEEDS_FIX` increments `fix_count` and attaches the latest QA report / CEO notes. At `max` → `escalate_to`.
+5. **Retries**: failed jobs retry with backoff ×3, then → `ESCALATED` with the error.
+6. **Timers**: follow-ups, preview TTL cleanup, retention purge.
+7. **Budget/credits guard**: if an office hits its daily LLM budget or runs out of credits, pause its LLM employees and notify.
+8. **Notify**: webhook/email when items hit a human gate or escalate.
+
+Employees never transition items themselves. They return an `EmployeeResult` (next status, note, artifacts, usage), and Atlas validates it against the workflow and applies it.
+
+```python
+class Employee(Protocol):
+    type_key: str
+    def run(self, item: WorkItem, task: str, ctx: EmployeeContext) -> EmployeeResult: ...
+# EmployeeContext: org, employee config, model client, repositories scoped to org,
+# integration clients for this org, country rules, file store scoped to org
+```
 
 CLI:
 ```
-wots run            # start Atlas loop + dashboard
-wots tick           # run a single tick (for debugging)
-wots import-leads leads.csv --scope website
-wots status         # pipeline counts per status/scope
+wots run                         # Atlas + workers + internal dashboard
+wots tick [--org wots-office]
+wots import-leads leads.csv --org wots-office --workflow website
+wots status [--org ...]
+wots orgs create "Wots Office" --template web_agency --template ad_agency --ceo lyndon@...
+wots employees hire --org ... --type web_developer --name Pixel --config style_profile=clean_modern
+wots workflows validate
 ```
 
-## 7. Agent specs
+---
 
-Every agent implements:
-```python
-class Agent(Protocol):
-    name: str
-    scope: set[str]
-    owns_status: str
-    def run(self, lead: Lead, ctx: AgentContext) -> AgentResult: ...
-```
-`AgentResult` = next status, note, artifacts created. Agents never call `transition` directly; Atlas applies the result.
+## 8. Employee specs (behaviour carried over from v1)
 
-### Scout (website)
-- Input: country list, business categories, regions (config).
-- Sources: adapter around **our existing scraper** (`integrations/existing_scraper.py` — Claude Code: ask Lyndon for the scraper's interface and wrap it) + Google Places API (Text Search) as a second source.
-- Output: `NEW` leads with business name, category, address, phone, source URL, country, and `website_found` if the source already lists one (Ledger will disqualify those).
-- Respect source terms of service and rate limits. Store `source` and `source_ref` for every lead.
+Unchanged in substance from v1; now each is an employee type implementation.
 
-### Scout-Ads (ad_refresh)
-- **v1 is manual intake.** Lyndon drops ad-library page links and screenshots into `data/inbox/ads/` (or uploads in the dashboard) with a small YAML/CSV sidecar: page name, platform, ad library URL, country, notes.
-- Scout-Ads normalises these into `NEW` leads plus `ad_captures` rows. **Do not build an automated scraper of Meta/TikTok/Google ad libraries** — it breaks their terms. Official APIs can be added later where they cover our countries.
-- Targeting filters (stored as checklist fields, set during intake): small business, physical product, ad running 2+ weeks, DIY-looking creative.
+- **Lead Researcher (Scout):** adapter around our existing scraper (internal org only, feature flag) + Google Places Text Search. Filters by country/category/region. Stores `source` + `source_ref`. Respects ToS and rate limits. Claude Code: ask Lyndon for the scraper's input/output format.
+- **Ad Researcher (Scout-Ads):** manual intake only (dashboard upload or `data/inbox/{org_id}/ads/` with a sidecar CSV/YAML: page name, platform, ad library URL, country, notes, checklist). **Do not build automated scraping of Meta/TikTok/Google ad libraries.**
+- **Data Verifier (Ledger):** confirm no real website (Places `website` field, DNS checks on likely domains; social-only counts as no website); dedupe (normalised name + phone + postcode); UK → Companies House (`entity_type`); AU → ABN Lookup (disqualify cancelled); ad_refresh → disqualify big brands; enrich business contact details and timezone; apply country rules (§11). Business contact data only.
+- **Copywriter (Quill):** `copy.json` (headline, subheadline, about, services[], cta, seo_title, meta_description). Locale spelling/currency. Never invent facts (reviews, awards, years, prices).
+- **Creative Strategist (Lens):** `brief.md` with product/offer, audience, current strengths, weaknesses, 2–3 hooks, visual direction per variation, formats (1080×1080, 1080×1350, 1080×1920), brand elements to keep.
+- **Graphic Designer (Iris/Juno):** website task → text logo + hero; ad task → 2–3 variations × 3 sizes. HTML/CSS templates in `templates/ads/` rendered to PNG with Playwright at exact sizes, using the business's **real product photos**. Never generate fake product images. Output `design_manifest.json`.
+- **Web Developer (Pixel/Nova):** single-page static site from `templates/sites/` (trades, food & hospitality, beauty & wellness, retail, professional services), customised by style profile. Sections: hero, about, services, gallery (real images only), contact, footer. Mobile-first, accessible, `noindex` while in preview.
+- **QA Tester (Hawk):**
+  - Websites: no console errors at 375/768/1440 px (screenshots saved), no broken links/images, contact details match record exactly, no placeholder text, Lighthouse a11y ≥ 90 / perf ≥ 80 / SEO ≥ 80 (ignoring noindex), locale proofread, `noindex` present.
+  - Ads: exact dimensions, min font size, WCAG AA contrast on key text, text-coverage threshold, logo + real product image present, proofread.
+  - Output `qa_report.json` (`passed`, `issues[]` with severity/description/location/suggested fix). Any `high` = fail.
+- **Deployment (Dock):** private noindexed Vercel preview using the **office's own** Vercel integration (internal org uses ours). Teardown after `preview_ttl_days` if `LOST`.
+- **Outreach Specialist (Echo):** personalised draft from `templates/email/{workflow}.md`; website pitch includes preview link + screenshots; ad pitch includes watermarked before/after, framed as "variations you could A/B test". Applies country profile, checks suppression before drafting and before sending, sends via the **office's own connected mailbox** in the recipient's local window (Tue–Thu 9–11am default), respects daily caps, one follow-up then `LOST`. Opt-out replies → suppression immediately.
+- **HR / Team Manager (new, Phase 6):**
+  - On hire of any employee: runs an onboarding checklist (config valid, required integrations connected, test task passes) and reports readiness.
+  - Weekly report per employee: items completed, QA first-pass rate, avg fix loops, avg time per state, credits used, cost per won deal.
+  - Staffing suggestions based on queue depth and WIP saturation. Suggestions only — the CEO decides.
 
-### Ledger (both)
-Verification:
-- `website`: confirm no real website — check the Places `website` field, try DNS lookups on likely domains (`{name}.com`, `.co.uk`, `.com.au`), note social pages. Facebook/Instagram-only counts as "no website"; a real domain disqualifies.
-- Dedupe by normalised name + phone + postcode.
-- UK: look up **Companies House API**. Record `entity_type` (ltd, plc, llp, sole_trader, partnership, unknown).
-- AU: look up **ABN Lookup** (web services GUID required). Disqualify if cancelled.
-- `ad_refresh`: disqualify obvious big brands (config list + heuristics like many active ads across countries).
+---
 
-Enrichment: business description, contact name (if public), business email, phone in local format, timezone, social links. Only store business contact details — no personal data beyond what's needed to contact the business.
+## 9. Data model
 
-Apply country rules from §9 (e.g. UK non-corporate → `DISQUALIFIED` with reason `uk_consent_required`).
-
-### Quill (website)
-- Writes site copy JSON: `headline`, `subheadline`, `about`, `services[]`, `cta`, `seo_title`, `meta_description`.
-- Local spelling (US vs UK/AU), local currency if prices appear.
-- Must not invent facts (no fake reviews, awards, years in business, prices). If info is missing, write around it.
-
-### Lens (ad_refresh)
-Produces `brief.md` per lead using a fixed template:
-- Product and offer
-- Likely audience
-- What the current ad does well
-- What's weak (hook, hierarchy, text load, image quality, CTA, mobile legibility)
-- Recommended hook(s) — 2–3 options
-- Visual direction per variation
-- Required formats: 1:1 (1080×1080), 4:5 (1080×1350), 9:16 (1080×1920)
-- Brand elements to keep (logo, colours, product shots)
-
-### Iris / Juno (graphic designers)
-- `website` scope (Iris only by default): simple text-based logo + hero image/banner using brand-appropriate colours. Output PNG/SVG to the lead folder.
-- `ad_refresh` scope: 2–3 variations per brief, each in all three sizes.
-- Method: pick from `templates/ads/` HTML/CSS layouts, fill with copy + colours + the business's **real product photos** (from the captures), render to PNG with Playwright at exact dimensions. Do not generate fake product images.
-- Output a `design_manifest.json` listing each file, size, variation and the hook used.
-
-### Pixel / Nova (web designers)
-- Build a single-page static site (HTML + CSS, Tailwind compiled or plain CSS; no build server needed) in `data/leads/{id}/site/`.
-- Start from `templates/sites/` base templates (Claude Code: create 4–5, e.g. trades, food & hospitality, beauty & wellness, retail, professional services), then customise layout, colours and sections using Quill's copy and Iris's assets.
-- Sections: hero, about, services, gallery (only if real images exist), contact (phone, email, address, map link), footer.
-- Must include `<meta name="robots" content="noindex">` while in preview.
-- Mobile-first, responsive, accessible.
-
-### Hawk (QA)
-Website checks (Playwright + Lighthouse):
-- Loads with no console errors at 375, 768 and 1440 px widths; save screenshots for the dashboard
-- No broken links or missing images
-- Phone/email/address match the lead record exactly
-- No placeholder text (`lorem`, `[Business Name]`, `TODO`, `example.com`)
-- Lighthouse thresholds (config): accessibility ≥ 90, performance ≥ 80, SEO ≥ 80 (SEO check ignores noindex)
-- LLM proofread pass for spelling/grammar in the correct locale
-- `noindex` present
-
-Ad checks:
-- Exact pixel dimensions for every file in the manifest
-- Minimum font size and text contrast (WCAG AA) for key text
-- Text doesn't cover too much of the image (config threshold)
-- Logo and real product image present
-- Spelling/grammar pass
-
-Output: `qa_report.json` with `passed`, and `issues[]` (each with severity, description, where, suggested fix). Any `high` issue = fail.
-
-### Dock (website)
-- Deploys `site/` to a Vercel preview URL with noindex. One project per lead, or one project with per-lead paths (open decision §12).
-- Stores the preview URL on the lead.
-- Previews are torn down after `preview_ttl_days` if the lead is `LOST`.
-
-### Echo (both)
-- Drafts a short, personalised email using `templates/email/{scope}.md` plus LLM personalisation (1–2 specific lines about the business).
-- `website`: includes the preview link and 1–2 screenshots.
-- `ad_refresh`: includes a before/after image (their current ad next to our best variation, watermarked) — frame as "variations you could A/B test", never "your ads are bad".
-- Applies the country rules profile (§9): footer, sender identity, postal address, opt-out wording.
-- Checks the suppression list before drafting and again before sending.
-- After CEO approval, schedules the send for the recipient's local business hours (Tue–Thu, 9–11am by default) and respects `daily_send_cap`.
-- One follow-up after `followup_after_days` if no reply, then `LOST`. No further contact.
-- Replies: v1 = CEO marks `REPLIED` / `WON` / `LOST` in the dashboard. Any reply containing an opt-out phrase → suppression list immediately.
-
-## 8. Data model
+All tables have `id` (UUID), `created_at`, `updated_at`. **Every tenant table has `org_id` (FK, indexed) and every query filters on it.**
 
 ```
-leads
-  id, scope, status, business_name, category, description,
-  country, region, timezone, address, phone, email, contact_name,
-  website_found, social_links(json), entity_type, registry_id,
-  source, source_ref, assigned_to, fix_count,
-  claimed_by, claim_expires_at, preview_url,
-  disqualify_reason, created_at, updated_at
+-- Tenancy & people
+organizations     id, name, slug, plan_key, status[active|paused|cancelled], settings(json),
+                  outreach_terms_accepted_at, is_internal(bool)
+users             id, email, name, auth_provider_id
+memberships       id, org_id, user_id, role[owner|ceo|manager|viewer], approvals_delegated(bool)
+                  -- constraint: exactly one ceo per org
 
-ad_captures      id, lead_id, platform, ad_library_url, screenshot_paths(json),
-                 ad_copy, first_seen, checklist(json), notes
-artifacts        id, lead_id, kind[copy|brief|logo|hero|site|ad_variant|qa_report|pitch],
-                 path, version, created_by, created_at
-qa_reports       id, lead_id, artifact_version, passed, issues(json), created_at
-approvals        id, lead_id, kind[build|pitch|escalation], decision, notes, decided_at
-outreach         id, lead_id, kind[initial|followup], subject, body, scheduled_for,
-                 sent_at, status, provider_message_id
-suppression      id, email, domain, reason, added_at
-events           id, lead_id, from_status, to_status, actor, note, ts
-llm_usage        id, agent, model, input_tokens, output_tokens, cost_usd, lead_id, ts
+-- Catalogue (platform-level, no org_id)
+employee_types    key, version, display_name, category, description, impl_path, task_kinds(json),
+                  default_model, config_schema(json), risk_level, plans(json), est_credits_per_task, status
+workflow_defs     key, version, definition(json)
+office_templates  key, version, definition(json)
+plans             key, name, price_monthly, currency, included_credits, max_employees,
+                  max_workflows, allowed_employee_types(json), features(json)
+
+-- Office setup
+employees         id, org_id, type_key, type_version, name, avatar, config(json),
+                  enabled, hired_at, fired_at
+org_workflows     id, org_id, workflow_key, workflow_version, active, settings(json)
+integrations      id, org_id, kind[email|vercel|places|companies_house|abn|webhook],
+                  status, secret_encrypted, meta(json)
+
+-- Work
+work_items        id, org_id, workflow_key, kind[lead|...], status, assigned_employee_id,
+                  fix_count, claimed_by, claim_expires_at, priority, disqualify_reason
+lead_profiles     work_item_id (PK/FK), org_id, business_name, category, description, country,
+                  region, timezone, address, phone, email, contact_name, website_found,
+                  social_links(json), entity_type, registry_id, source, source_ref, preview_url
+ad_captures       id, org_id, work_item_id, platform, ad_library_url, screenshot_paths(json),
+                  ad_copy, first_seen, checklist(json), notes
+artifacts         id, org_id, work_item_id, kind[copy|brief|logo|hero|site|ad_variant|qa_report|pitch],
+                  path, version, created_by_employee_id, created_at
+qa_reports        id, org_id, work_item_id, artifact_version, passed, issues(json)
+approvals         id, org_id, work_item_id, kind[build|pitch|escalation], decision, notes,
+                  decided_by_user_id, decided_at
+outreach          id, org_id, work_item_id, kind[initial|followup], subject, body,
+                  scheduled_for, sent_at, status, provider_message_id
+suppression       id, org_id, email, domain, reason, added_at
+events            id, org_id, work_item_id, from_status, to_status, actor_kind[employee|user|system],
+                  actor_id, note, ts
+jobs              id, org_id, work_item_id, employee_id, task, status, attempts, error, ts
+
+-- Metering & billing
+usage_events      id, org_id, employee_id, work_item_id, kind[llm|places_call|render|deploy|email_send],
+                  model, input_tokens, output_tokens, cost_usd, credits, ts
+credit_ledger     id, org_id, delta, reason[plan_grant|topup|usage|adjustment], ref, balance_after, ts
+subscriptions     id, org_id, stripe_customer_id, stripe_subscription_id, plan_key, status,
+                  current_period_end
+audit_log         id, org_id, user_id, action, target, meta(json), ts   -- hires, fires, role changes, integration changes, approvals
 ```
 
-Files on disk: `data/leads/{lead_id}/` → `copy.json`, `brief.md`, `assets/`, `site/`, `ads/`, `qa/`, `pitch/`.
+Files: `data/orgs/{org_id}/items/{work_item_id}/` → `copy.json`, `brief.md`, `assets/`, `site/`, `ads/`, `qa/`, `pitch/`. A `FileStore` interface wraps this so we can move to S3/Supabase Storage in Phase 7.
 
-Retention: leads that end `LOST` or `DISQUALIFIED` are purged of contact details after `retention_days` (default 180); suppression entries are kept forever.
+Retention: `LOST`/`DISQUALIFIED` items have contact details purged after `retention_days` (default 180). Suppression entries are kept.
 
-## 9. Country rules (config/countries/*.yaml)
+---
 
-Not legal advice — the CEO will review each regulator's guidance (FTC, ICO, ACMA) before live sending. NZ's Unsolicited Electronic Messages Act also applies because we send from NZ: always identify the sender and include a working unsubscribe.
+## 10. Metering & credits
+
+- Every LLM call and billable action writes a `usage_events` row with `cost_usd` and `credits`.
+- Credits = platform currency (e.g. 1 credit = fixed USD amount, set in `config/billing.yaml`).
+- Phases 0–6: metering only (internal org has unlimited credits, but we still see costs per employee/task — this data sets SaaS pricing).
+- Phase 8: plans grant monthly credits; top-ups via Stripe; Atlas pauses LLM work at zero balance.
+
+---
+
+## 11. Compliance & country rules
+
+Not legal advice; the CEO reviews FTC, ICO and ACMA guidance before live sending. NZ's Unsolicited Electronic Messages Act applies to anything we send from NZ.
+
+**Country profiles** (`config/countries/*.yaml`) — platform-enforced for every office:
 
 ```yaml
-# config/countries/us.yaml
+# us.yaml
 code: US
 spelling: en-US
 currency: USD
-phone_format: "(XXX) XXX-XXXX"
-channels_allowed: [email]          # no automated calls/SMS
+channels_allowed: [email]            # no automated calls/SMS
 contactable_entity_types: [any]
 require_postal_address: true
 require_unsubscribe: true
@@ -285,100 +418,172 @@ unsubscribe_honor_days: 10
 send_window_local: {days: [TUE, WED, THU], start: "09:00", end: "11:00"}
 ```
 ```yaml
-# config/countries/uk.yaml
+# uk.yaml
 code: UK
 spelling: en-GB
 currency: GBP
-phone_format: "+44 XXXX XXXXXX"
 channels_allowed: [email]
-contactable_entity_types: [ltd, plc, llp]   # sole traders & partnerships need prior consent → disqualify
+contactable_entity_types: [ltd, plc, llp]   # sole traders & ordinary partnerships → disqualify
 require_postal_address: true
 require_unsubscribe: true
-require_source_disclosure: true            # say where we found their details
+require_source_disclosure: true
 send_window_local: {days: [TUE, WED, THU], start: "09:00", end: "11:00"}
 ```
 ```yaml
-# config/countries/au.yaml
+# au.yaml
 code: AU
 spelling: en-AU
 currency: AUD
-phone_format: "+61 X XXXX XXXX"
 channels_allowed: [email]
 contactable_entity_types: [any]
-require_conspicuous_publication: true      # email must be publicly listed by the business
+require_conspicuous_publication: true
 require_unsubscribe: true
 unsubscribe_honor_days: 5
 send_window_local: {days: [TUE, WED, THU], start: "09:00", end: "11:00"}
 ```
 
-Sending hygiene (settings.yaml): separate sending domain, SPF/DKIM/DMARC set up, `daily_send_cap` starting at 20 and raised slowly.
+**Multi-tenant rules:**
+- Offices send from **their own connected mailbox/domain**, never from platform infrastructure.
+- Hiring an Outreach Specialist requires the owner to accept outreach terms (`outreach_terms_accepted_at`) and set a postal address for footers.
+- Per-office suppression list; plus a platform-level block list for spam complaints and abuse.
+- Platform daily send caps per office (start low, raise with account age and low complaint rate).
+- Customer-facing lead sourcing uses official APIs only; the private scraper is internal-org-only.
+- Audit log for approvals, hires, integration changes.
 
-## 10. CEO dashboard (localhost)
+---
 
-Pages:
-- **Pipeline**: counts per scope × status, per-designer load, today's LLM spend.
-- **Approval queue**: side-by-side view — website in an iframe with the 3 viewport screenshots, or ad variations with the original ad next to them. Shows Hawk's report. Buttons: Approve / Reject with notes (→ `NEEDS_FIX`) / Disqualify.
-- **Pitch queue**: rendered email, editable before approval. Approve / Edit / Reject.
-- **Escalations**: reason, history, actions.
-- **Lead detail**: full timeline from `events`, all artifacts.
-- **Intake**: upload ad captures (Scout-Ads) and CSV lead imports.
-- **Suppression list**: view/add.
-- **Replies**: mark `REPLIED` / `WON` / `LOST`.
+## 12. Internal dashboard (Phases 1–6, localhost)
 
-## 11. Repo layout
+Scoped to one office at a time (office switcher at the top):
+- **Pipeline:** counts per workflow × status, per-employee load, today's spend/credits
+- **Team:** hired employees, their type, config, status, current items; hire/fire/edit (CEO)
+- **Approval queue:** site in iframe + 3 viewport screenshots, or ad variations beside the original; Hawk's report; Approve / Reject with notes / Disqualify
+- **Pitch queue:** rendered email, editable; Approve / Edit / Reject
+- **Escalations**, **Work item detail** (timeline + artifacts), **Intake** (ad captures, CSV import), **Suppression**, **Replies** (mark REPLIED/WON/LOST)
+- **HR reports** (Phase 6)
+
+All dashboard routes resolve `OrgContext` from the logged-in user's membership (Phase 1–6: a simple local login; Phase 7: Supabase Auth).
+
+---
+
+## 13. Customer web app (Phase 8)
+
+Next.js on Vercel, calling the FastAPI API.
+
+1. **Landing page:** what Wots Office is, employee catalogue, office templates, pricing.
+2. **Sign up & subscribe:** Supabase Auth → Stripe Checkout for a plan.
+3. **Onboarding wizard:**
+   1. Name your office
+   2. Choose the CEO (yourself or invite a teammate by email)
+   3. Pick an office template (Web Agency / Ad Agency / Start empty)
+   4. Review the recommended team → rename, remove, or add employees from the catalogue (limited by plan)
+   5. Connect integrations required by your team (mailbox, Vercel, …) — HR/Team Manager's onboarding checklist shows what's missing
+   6. Accept outreach terms (only if an Outreach Specialist is hired)
+4. **Office app:** same pages as the internal dashboard, plus Billing (plan, credits, invoices) and Members (invite, roles, delegate approvals).
+
+---
+
+## 14. Repo layout
 
 ```
 wots-office/
-  docs/SPEC.md
-  config/settings.yaml  config/agents.yaml  config/countries/{us,uk,au}.yaml
+  docs/SPEC.md  docs/SPEC_v1.md
+  config/settings.yaml  config/models.yaml  config/billing.yaml  config/countries/{us,uk,au}.yaml
   wots/
-    core/      db.py models.py states.py board.py atlas.py llm.py config.py cli.py
-    agents/    scout.py scout_ads.py ledger.py quill.py lens.py
-               graphic_designer.py web_designer.py hawk.py dock.py echo.py
-    integrations/ existing_scraper.py places.py companies_house.py abn.py
-                  vercel.py email_provider.py notify.py lighthouse.py
-    dashboard/ app.py templates/ static/
-  templates/  sites/ ads/ email/
-  data/       wots.db leads/ inbox/ outbox/
+    core/          db.py models.py repo.py (org-scoped repositories) context.py config.py cli.py
+                   events.py files.py jobs.py secrets.py metering.py
+    orchestration/ atlas.py workflow_loader.py workflow_validator.py assignment.py timers.py
+    employees/
+      types/       *.yaml            # catalogue definitions
+      impl/        lead_researcher.py ad_researcher.py data_verifier.py copywriter.py
+                   creative_strategist.py graphic_designer.py web_developer.py qa_tester.py
+                   deployment.py cold_email.py hr_manager.py
+      base.py      # Employee protocol, EmployeeContext, EmployeeResult
+    workflows/     website.yaml ad_refresh.yaml
+    templates/offices/ web_agency.yaml ad_agency.yaml
+    integrations/  existing_scraper.py places.py companies_house.py abn.py vercel.py
+                   email_provider.py notify.py lighthouse.py stripe_client.py
+    api/           (Phase 7) FastAPI routers: auth, orgs, members, employees, workflows,
+                   work_items, approvals, billing, webhooks
+    dashboard/     app.py templates/ static/
+  web/             (Phase 8) Next.js app
+  templates/       sites/ ads/ email/
+  data/            wots.db orgs/ inbox/ outbox/
   tests/
-  .env.example   # ANTHROPIC_API_KEY, GOOGLE_PLACES_KEY, COMPANIES_HOUSE_KEY, ABN_GUID, VERCEL_TOKEN, EMAIL_PROVIDER_KEY, NOTIFY_WEBHOOK
+  .env.example     # ANTHROPIC_API_KEY, SECRETS_KEY, GOOGLE_PLACES_KEY, COMPANIES_HOUSE_KEY, ABN_GUID,
+                   # VERCEL_TOKEN, EMAIL_PROVIDER_KEY, NOTIFY_WEBHOOK, (Phase 7+) DATABASE_URL,
+                   # SUPABASE_URL, SUPABASE_JWT_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 ```
 
-## 12. Build phases
+---
 
-**Phase 0 — Skeleton**
-Repo, config loading, DB models + migrations, state tables, `board.transition`, Atlas tick loop with claims/leases, WIP logic, events log, CLI, `DRY_RUN`.
-✅ Unit tests cover every allowed/blocked transition, batch vs rolling WIP, fix-count escalation and lease expiry. `wots status` works.
+## 15. Migration from v1 (do this first)
 
-**Phase 1 — Website pipeline (no scraping, no email)**
-CSV lead import → Ledger (enrichment only) → Quill → Pixel/Nova → Hawk → dashboard approval queue.
-✅ 4 sample leads flow to `APPROVED`; a deliberately broken site gets `NEEDS_FIX`, is fixed and re-passes; designers never exceed WIP 2.
+1. **Audit:** list which v1 phases/files exist and what tests pass. Report before editing.
+2. **Tenancy tables:** add `organizations`, `users`, `memberships`. Alembic migration creates the internal org `Wots Office` (`slug: wots-office`, `is_internal: true`) and a user/membership for Lyndon as `owner` + `ceo`.
+3. **Work items:** migrate `leads` → `work_items` (status, assignment, fix_count, claims) + `lead_profiles` (business/contact fields). `scope` → `workflow_key` (`website` | `ad_refresh`). Backfill `org_id` on every existing table.
+4. **Workflows as data:** move the transition tables from `states.py` into `wots/workflows/*.yaml`; `states.py` becomes the loader/validator. Add the `VERIFY` state (existing `NEW` items owned by Ledger map to `VERIFY` if already claimed).
+5. **Employees:** convert v1 agent classes into employee type implementations (`Pixel`/`Nova` → one `WebDeveloper`; `Iris`/`Juno` → one `GraphicDesigner`, etc.). Move `config/agents.yaml` entries into `employees` rows for the internal org via the office templates.
+6. **Org scoping:** introduce `OrgContext` and org-scoped repositories; replace direct queries. Add a test helper that fails any query on a tenant table without an `org_id` filter.
+7. **Files:** move `data/leads/{id}/` → `data/orgs/{org_id}/items/{id}/` behind `FileStore`.
+8. **Metering:** wrap the LLM client so every call writes `usage_events`.
+9. **Rename** `llm_usage` → `usage_events` (if it exists).
+10. **Tests:** all v1 tests pass against the internal org; add isolation tests (§16 Phase 0).
+
+---
+
+## 16. Build phases
+
+**Phase 0 — Multi-tenant core** (replaces v1 Phase 0; includes the migration)
+Tenancy tables, org-scoped repos, employee type registry + loader, employees, workflow YAML loader/validator, office templates, work items, generic Atlas (assign/dispatch/fix/retry/leases/WIP batch+rolling), job queue interface, events, usage metering, CLI (`orgs create`, `employees hire`, `workflows validate`, `status`).
+✅ Internal org seeded from `web_agency` + `ad_agency`. Tests: every allowed/blocked transition from YAML; batch vs rolling WIP; fix-loop escalation; lease expiry; `skip_if_missing`; activation fails when a required type isn't hired; **a second test org cannot read or modify the first org's items, files, employees or suppression list.**
+
+**Phase 1 — Website workflow (no scraping, no email)**
+CSV import → Verifier (enrichment only) → Copywriter → Web Developers → QA → approval queue in the internal dashboard.
+✅ 4 sample leads reach `APPROVED`; a broken site gets `NEEDS_FIX`, returns to the same developer, re-passes; no developer exceeds WIP 2.
 
 **Phase 2 — Real leads**
-Scout with existing scraper + Places API; Ledger verification, dedupe, Companies House, ABN Lookup, country rules.
-✅ 50 real leads per country ingested; UK sole traders disqualified with reason; businesses with real domains disqualified.
+Lead Researcher (scraper adapter behind internal flag + Places API), Verifier checks (DNS, dedupe, Companies House, ABN), country rules.
+✅ 50 real leads per country; UK sole traders disqualified with reason; real-domain businesses disqualified.
 
 **Phase 3 — Assets & previews**
-Iris logo/hero feeding the web designers; Dock Vercel previews with noindex and TTL cleanup.
-✅ Approved sites get working preview URLs; previews are not indexable.
+Graphic Designer logo/hero; Deployment previews (noindex, TTL cleanup) via org-level Vercel integration.
+✅ Approved sites get working, non-indexable preview URLs.
 
 **Phase 4 — Outreach (manual send)**
-Echo drafting, country footers, suppression list, pitch approval queue, scheduling, email provider integration. `auto_send=false`: approved pitches go to `data/outbox/` or are sent only after a second explicit "Send" click.
-✅ Pitches render correctly for US/UK/AU; suppressed addresses can't be drafted or sent; sends land in the recipient's local window.
+Outreach drafting, country footers, per-org suppression, pitch queue, scheduling, org-connected email provider. `auto_send=false`.
+✅ Correct US/UK/AU pitches; suppressed addresses blocked at draft and send; sends land in the local window.
 
-**Phase 5 — Ad Refresh scope**
-Intake page, Scout-Ads, Lens briefs, Iris/Juno HTML→PNG variations in 3 sizes, Hawk ad QA, before/after pitch.
-✅ 3 sample advertisers flow to `PITCH_DRAFTED` with correct sizes and a passing QA report.
+**Phase 5 — Ad Refresh workflow**
+Intake, Ad Researcher, Creative Strategist, Graphic Designers (HTML→PNG, 3 sizes), ad QA, before/after pitch.
+✅ 3 sample advertisers reach `PITCH_DRAFTED` with correct sizes and a passing QA report.
 
-**Phase 6 — Hardening**
-Cost tracking dashboard, budget guard, retries, notifications, follow-ups, retention purge, metrics (reply rate and win rate per scope/country/designer).
+**Phase 6 — Hardening + HR / Team Manager**
+Cost dashboard, budget guard, notifications, follow-ups, retention purge; HR onboarding checklist and weekly reports; win/reply metrics per workflow/country/employee.
+✅ Weekly HR report generated for the internal org; hiring a new employee triggers the onboarding checklist.
 
-## 13. Open decisions (ask the CEO)
+**Phase 7 — SaaS foundations**
+Postgres (Supabase) + RLS policies; Supabase Auth; public FastAPI API with org-scoped endpoints; real job queue; `FileStore` on cloud storage; encrypted per-org integrations with OAuth for Gmail/Microsoft mailboxes; per-org concurrency and send caps.
+✅ Two real test orgs run workflows concurrently with full isolation (API, DB with RLS, files, queue).
 
-1. Interface of our existing scraper (input/output format).
-2. Email provider — note many transactional providers (e.g. those built for receipts/notifications) forbid cold outreach in their terms; pick one that allows B2B prospecting.
-3. Public unsubscribe link: v1 uses "reply 'unsubscribe'" + `List-Unsubscribe: mailto:`. Later, a tiny public endpoint on Vercel.
-4. Vercel: one project per lead vs one shared project with paths.
-5. Pricing per market (USD/GBP/AUD) to mention in pitches.
-6. Physical postal address to use in email footers.
-7. Default model per agent and daily LLM budget.
+**Phase 8 — Customer web app & billing**
+Next.js landing/pricing, Stripe subscriptions + credit top-ups + webhooks, onboarding wizard (§13), office app, members/roles/invites, plan limits on hiring.
+✅ A new customer can subscribe, name the office, set a CEO, pick a template, hire/rename employees, connect integrations, and see work flow to their approval queue; zero-credit offices pause correctly.
+
+**Phase 9 — Catalogue growth**
+`content_creator` employee + `content_studio` workflow/template; simple workflow editor (choose from validated building blocks, not free-form code).
+
+---
+
+## 17. Open decisions (ask the CEO)
+
+1. Existing scraper interface (input/output format).
+2. Email approach: internal org provider now; for customers, OAuth-connected Gmail/Microsoft mailboxes vs. SMTP. Note many transactional email providers forbid cold outreach.
+3. Public unsubscribe: v1 uses "reply 'unsubscribe'" + `List-Unsubscribe: mailto:`; later a public endpoint.
+4. Vercel preview structure: project per item vs. shared project with paths.
+5. Our agency pricing per market (USD/GBP/AUD) for pitches.
+6. Postal address for our email footers.
+7. Model aliases (`fast`, `strong`) and daily LLM budget for the internal org.
+8. SaaS plans: names, prices, included credits, employee limits (decide after Phase 6 cost data).
+9. Credit value (USD per credit) and per-task credit estimates.
+10. Product name for the SaaS (keep "Wots Office"?).

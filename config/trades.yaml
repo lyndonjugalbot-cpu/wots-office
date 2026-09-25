@@ -1,0 +1,84 @@
+# Trades we can search for (spec v2 §8, Phase 2 lead research).
+#   osm: OpenStreetMap tags that mark the business (any match counts)
+#   sic: UK Standard Industrial Classification codes, for Companies House's company search
+# Add a trade by adding an entry; both keys are optional.
+plumber:
+  label: Plumbers
+  osm: [[craft, plumber], [shop, plumber]]
+  sic: ["43220"]
+electrician:
+  label: Electricians
+  osm: [[craft, electrician]]
+  sic: ["43210"]
+builder:
+  label: Builders
+  osm: [[craft, builder], [office, construction_company]]
+  sic: ["41202", "43999"]
+roofer:
+  label: Roofers
+  osm: [[craft, roofer]]
+  sic: ["43910"]
+painter:
+  label: Painters & decorators
+  osm: [[craft, painter]]
+  sic: ["43341"]
+carpenter:
+  label: Carpenters & joiners
+  osm: [[craft, carpenter], [craft, joiner]]
+  sic: ["43320"]
+plasterer:
+  label: Plasterers
+  osm: [[craft, plasterer]]
+  sic: ["43310"]
+gardener:
+  label: Gardeners & landscapers
+  osm: [[craft, gardener], [shop, garden_centre]]
+  sic: ["81300"]
+cleaner:
+  label: Cleaners
+  osm: [[craft, cleaning], [shop, dry_cleaning], [shop, laundry]]
+  sic: ["81210", "81229"]
+locksmith:
+  label: Locksmiths
+  osm: [[craft, locksmith], [shop, locksmith]]
+  sic: ["80200"]
+mechanic:
+  label: Mechanics
+  osm: [[shop, car_repair]]
+  sic: ["45200"]
+hairdresser:
+  label: Hairdressers & barbers
+  osm: [[shop, hairdresser]]
+  sic: ["96020"]
+beauty:
+  label: Beauty salons
+  osm: [[shop, beauty]]
+  sic: ["96020", "96040"]
+cafe:
+  label: Cafés
+  osm: [[amenity, cafe]]
+  sic: ["56102", "56103"]
+restaurant:
+  label: Restaurants
+  osm: [[amenity, restaurant]]
+  sic: ["56101"]
+bakery:
+  label: Bakeries
+  osm: [[shop, bakery]]
+  sic: ["10710", "47240"]
+florist:
+  label: Florists
+  osm: [[shop, florist]]
+  sic: ["47760"]
+bookkeeper:
+  label: Bookkeepers & accountants
+  osm: [[office, accountant]]
+  sic: ["69201", "69202", "69203"]
+photographer:
+  label: Photographers
+  osm: [[craft, photographer], [shop, photo]]
+  sic: ["74201", "74202"]
+physio:
+  label: Physiotherapists
+  osm: [[healthcare, physiotherapist], [amenity, physiotherapist]]
+  sic: ["86900"]

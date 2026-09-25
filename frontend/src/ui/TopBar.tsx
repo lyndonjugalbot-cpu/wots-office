@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { api } from "../api";
-import type { Overview } from "../types";
+import type { Me, Overview } from "../types";
 
 interface Props {
+  me: Me;
+  office: string;
+  onSwitchOffice: (slug: string) => void;
   overview: Overview | null;
   connected: boolean;
   onOpenQueue: () => void;
@@ -34,6 +37,13 @@ export function TopBar(p: Props) {
         <span className="brand__gem" />
         WOTS OFFICE
         <span className={`conn ${p.connected ? "conn--on" : ""}`} title={p.connected ? "Connected" : "Can't reach the dashboard API"} />
+        {p.me.offices.length > 1 ? (
+          <select className="officepick" value={p.office} aria-label="Office" onChange={(e) => p.onSwitchOffice(e.target.value)}>
+            {p.me.offices.map((o) => <option key={o.slug} value={o.slug}>{o.name}</option>)}
+          </select>
+        ) : (
+          <span className="officepick officepick--static">{p.me.offices[0]?.name}</span>
+        )}
       </div>
 
       <div className="hud">
@@ -41,6 +51,11 @@ export function TopBar(p: Props) {
         {ov && (
           <span className="hud__stat" title="LLM spend today / cap">
             $ {ov.spend_today.toFixed(2)} / {ov.spend_cap.toFixed(2)}
+          </span>
+        )}
+        {ov && ov.credits !== null && (
+          <span className={`hud__stat ${ov.credits <= 0 ? "badge-red" : ""}`} title="Credits left">
+            {Math.floor(ov.credits)} credits
           </span>
         )}
         <button className={`btn btn--small ${pending ? "btn--primary" : ""}`} onClick={p.onOpenQueue}>
@@ -59,6 +74,10 @@ export function TopBar(p: Props) {
         <label className="toggle">
           <input type="checkbox" checked={p.autoRotate} onChange={(e) => p.onAutoRotate(e.target.checked)} /> Spin
         </label>
+        <button className="btn btn--small" title={`Signed in as ${p.me.user.email}`}
+          onClick={() => api.logout().then(() => window.location.reload())}>
+          Sign out
+        </button>
       </div>
     </header>
   );

@@ -1,0 +1,16 @@
+key: lead_researcher
+version: 1
+display_name: Lead Researcher
+category: research
+description: Finds businesses from approved sources (our scraper adapter for the internal office, Google Places API) and hands imported leads to verification.
+impl: wots.employees.impl.lead_researcher:LeadResearcher
+task_kinds: [research_leads]
+default_model: fast
+tools: [places_api, internal_scraper]
+config_schema:
+  countries: {type: list, default: [US, UK, AU]}
+risk_level: low
+plans: [starter, pro, agency]
+est_credits_per_task: 1
+status: available
+uses_llm: false              # the budget guard pauses employees that call Claude

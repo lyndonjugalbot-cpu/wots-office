@@ -1,0 +1,12 @@
+key: ad_agency
+version: 1
+display_name: Ad Agency
+workflows: [ad_refresh]
+recommended_team:
+  - {type: ad_researcher, name: Scout-Ads}
+  - {type: data_verifier, name: Ledger}
+  - {type: creative_strategist, name: Lens}
+  - {type: graphic_designer, name: Iris}
+  - {type: graphic_designer, name: Juno, config: {style_profile: bold_playful}}
+  - {type: qa_tester, name: Hawk}
+  - {type: cold_email, name: Echo}

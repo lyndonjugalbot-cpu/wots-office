@@ -1,0 +1,15 @@
+key: content_creator
+version: 1
+display_name: Content Creator
+category: writing
+description: Social posts and captions with visuals, from a brief.
+impl: wots.employees.impl.content_creator:ContentCreator
+task_kinds: [social_content]
+default_model: strong
+tools: [filesystem, renderer]
+config_schema: {}
+risk_level: low
+plans: [pro, agency]
+est_credits_per_task: 12
+status: planned
+uses_llm: true              # the budget guard pauses employees that call Claude

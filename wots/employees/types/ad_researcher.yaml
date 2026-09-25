@@ -1,0 +1,15 @@
+key: ad_researcher
+version: 1
+display_name: Ad Researcher
+category: research
+description: Normalises manually captured ad-library entries into work items. Never scrapes ad libraries.
+impl: wots.employees.impl.ad_researcher:AdResearcher
+task_kinds: [intake_ads]
+default_model: fast
+tools: [filesystem]
+config_schema: {}
+risk_level: low
+plans: [pro, agency]
+est_credits_per_task: 1
+status: available
+uses_llm: false              # the budget guard pauses employees that call Claude
