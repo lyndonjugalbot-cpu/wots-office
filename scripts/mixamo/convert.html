@@ -1,0 +1,81 @@
+<!doctype html>
+<!-- Runs inside headless Chromium (see convert_mixamo.py): three.js's own FBX loader and glTF
+     exporter turn Mixamo downloads into small web assets. -->
+<script type="importmap">
+{ "imports": { "three": "/frontend/node_modules/three/build/three.module.js",
+               "three/addons/": "/frontend/node_modules/three/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
+
+const ALPHA = /hair|lash|brow|eyelash|transparent/i;
+
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(out);
+}
+
+// FBXLoader resolves before the embedded textures finish decoding: wait for each image
+async function texturesReady(obj, ms = 30000) {
+  const textures = new Set();
+  obj.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of [].concat(o.material)) for (const t of [m.map, m.normalMap, m.specularMap, m.emissiveMap]) if (t) textures.add(t);
+  });
+  const ok = (t) => t.image && ((t.image.complete && t.image.naturalWidth > 0) || t.image.width > 0 && !(t.image instanceof HTMLImageElement));
+  const start = performance.now();
+  while ([...textures].some((t) => !ok(t)) && performance.now() - start < ms) await new Promise((r) => setTimeout(r, 100));
+  const missing = [...textures].filter((t) => !ok(t));
+  obj.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of [].concat(o.material)) for (const k of ["map", "normalMap", "specularMap", "emissiveMap"]) if (m[k] && !ok(m[k])) m[k] = null;
+  });
+  return missing.length;
+}
+
+window.convertCharacter = async (url, maxTextureSize) => {
+  const obj = await new FBXLoader().loadAsync(url);
+  const brokenTextures = await texturesReady(obj);
+  obj.animations = [];
+  let meshes = 0, triangles = 0, bones = 0;
+  const materials = [];
+  obj.traverse((o) => {
+    if (o.isBone) bones++;
+    if (!o.isMesh) return;
+    meshes++;
+    const g = o.geometry;
+    triangles += (g.index ? g.index.count : g.attributes.position.count) / 3;
+    o.castShadow = true;
+    const convert = (m) => {
+      const alpha = m.transparent || m.alphaTest > 0 || ALPHA.test(m.name) || ALPHA.test(o.name);
+      for (const t of [m.map, m.normalMap]) if (t) t.userData.mimeType = alpha ? "image/png" : "image/jpeg";
+      materials.push(`${o.name}/${m.name}${m.map ? " +map" : ""}${m.normalMap ? " +normal" : ""}${alpha ? " (alpha)" : ""}`);
+      return new THREE.MeshStandardMaterial({
+        name: m.name, color: m.color, map: m.map ?? null, normalMap: m.normalMap ?? null,
+        roughness: 0.8, metalness: 0, transparent: alpha, alphaTest: alpha ? 0.5 : 0,
+        side: alpha ? THREE.DoubleSide : THREE.FrontSide, depthWrite: !alpha || true,
+      });
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(convert) : convert(o.material);
+  });
+  obj.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(obj);
+  const glb = await new GLTFExporter().parseAsync(obj, { binary: true, maxTextureSize, onlyVisible: true });
+  return { b64: toBase64(glb), height: box.max.y - box.min.y, meshes, triangles, bones, materials, brokenTextures };
+};
+
+window.extractClip = async (url, name) => {
+  const obj = await new FBXLoader().loadAsync(url);
+  const clip = obj.animations[0];
+  clip.name = name;
+  clip.optimize();
+  const bones = [];
+  obj.traverse((o) => { if (o.isBone) bones.push(o.name); });
+  return { json: THREE.AnimationClip.toJSON(clip), duration: clip.duration, tracks: clip.tracks.length, bones };
+};
+window.ready = true;
+</script>

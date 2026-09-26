@@ -30,11 +30,15 @@ budget:
   dry_run_llm_cap_usd: 1.00
 
 outreach:
-  daily_send_cap: 20
-  followup_after_days: 5
+  daily_send_cap: 20                   # per office, initial pitches and follow-ups together
+  followup_after_days: 5               # one follow-up this long after the pitch; LOST the same time after that
+  sender_name: Lyndon                  # signs the pitches ("Lyndon, Wots Office")
+  pricing: {}                          # per country, e.g. {US: "from $450", UK: "from £350", AU: "from A$650"}; empty = no price in pitches
+  reply_check_minutes: 5               # how often the mailbox is read for replies and opt-outs
 
 previews:
-  preview_ttl_days: 30
+  preview_ttl_days: 30                 # a LOST lead's preview is taken down after this
+  cloudflare_project: wots-previews    # one Cloudflare Pages project; each site is a branch in it
 
 retention_days: 180
 

@@ -1,11 +1,12 @@
 import { OrbitControls, OrthographicCamera } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { OfficeAgent } from "../types";
 import { Desk } from "./Desk";
 import { LabelProjector } from "./labels";
 import { deskLayout, walkMap } from "./layout";
 import { Room } from "./Room";
+import { castFor, loadCast, type Cast } from "./people";
 import { Worker } from "./Worker";
 
 interface Props {
@@ -13,25 +14,32 @@ interface Props {
   board: { title: string; lines: string[]; footer: string };
   selected: string | null;
   onSelect: (id: string | null) => void;
-  retro: boolean;
   autoRotate: boolean;
 }
 
-export function Scene({ agents, board, selected, onSelect, retro, autoRotate }: Props) {
+export function Scene({ agents, board, selected, onSelect, autoRotate }: Props) {
   const { spots, frontZ } = deskLayout(agents);
+  // Realistic people if the Mixamo cast is installed (undefined while loading, null if not)
+  const [cast, setCast] = useState<Cast | null | undefined>(undefined);
+  useEffect(() => {
+    loadCast().then(setCast);
+  }, []);
+  const ids = agents.map((a) => a.id).join(",");
+  const roles = useMemo(() => castFor(ids ? ids.split(",") : [], cast ?? null), [ids, cast]);
   const map = walkMap(spots, frontZ);
   const centerZ = (frontZ - 6) / 2;
 
   return (
     <Canvas
-      shadows="percentage"
-      className={retro ? "office-canvas office-canvas--retro" : "office-canvas"}
-      // Rendering at a low resolution and scaling up with pixelated CSS gives the retro look
-      dpr={retro ? 0.5 : [1, 2]}
+      shadows="soft"
+      className="office-canvas"
+      dpr={[1, 2]}
+      gl={{ antialias: true, toneMappingExposure: 0.92 }}
       onPointerMissed={() => onSelect(null)}
     >
-      <color attach="background" args={["#2a2140"]} />
-      <OrthographicCamera makeDefault position={[16, 15, 16 + centerZ]} zoom={36} near={-100} far={200} />
+      <color attach="background" args={["#e9edf2"]} />
+      <fog attach="fog" args={["#e9edf2", 40, 90]} />
+      <OrthographicCamera makeDefault position={[16, 15, 16 + centerZ]} zoom={36} near={1} far={90} />
       <OrbitControls
         target={[0, 0.8, centerZ]}
         enableDamping
@@ -42,20 +50,24 @@ export function Scene({ agents, board, selected, onSelect, retro, autoRotate }: 
         autoRotateSpeed={0.6}
       />
 
-      <ambientLight intensity={0.55} color="#fff4e0" />
-      <hemisphereLight args={["#fff8e7", "#6b4f3a", 0.5]} />
+      {/* bright, soft daylight: sky fill, a warm sun through the windows, a cool bounce */}
+      <ambientLight intensity={0.3} color="#ffffff" />
+      <hemisphereLight args={["#f4f8ff", "#cdbca5", 0.65]} />
       <directionalLight
-        position={[9, 16, 10]}
-        intensity={1.6}
-        color="#fff1d6"
+        position={[-10, 16, 8]}
+        intensity={1.65}
+        color="#fff4e2"
         castShadow
         shadow-mapSize={[2048, 2048]}
+        shadow-radius={6}
         shadow-camera-left={-14}
         shadow-camera-right={14}
         shadow-camera-top={14}
         shadow-camera-bottom={-14}
-        shadow-bias={-0.0005}
+        shadow-bias={-0.0004}
+        shadow-normalBias={0.03}
       />
+      <directionalLight position={[12, 8, -6]} intensity={0.35} color="#dfe8ff" />
 
       <FitZoom depth={frontZ + 6} />
       <Room frontZ={frontZ} board={board} />
@@ -65,8 +77,13 @@ export function Scene({ agents, board, selected, onSelect, retro, autoRotate }: 
         if (!spot) return null;
         return (
           <group key={member.id} position={spot.position}>
-            <Desk status={member.status} big={spot.big} />
-            <Worker member={member} home={spot.position} map={map} selected={selected === member.id} onSelect={onSelect} />
+            <group rotation={[0, Math.PI, 0]}>
+              <Desk status={member.status} big={spot.big} />
+            </group>
+            {cast !== undefined && (
+              <Worker member={member} character={roles[member.id]} clips={cast?.clips} home={spot.position} map={map}
+                selected={selected === member.id} onSelect={onSelect} />
+            )}
           </group>
         );
       })}

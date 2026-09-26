@@ -49,9 +49,8 @@ def test_high_risk_types_need_the_outreach_terms(make_runtime):
     rt.offices.accept_outreach_terms(ctx, "1 Queen St, Auckland")
     echo = rt.offices.hire(ctx, "cold_email", "Echo")
     assert echo.type_key == "cold_email"
-    rt.offices.activate_workflow(ctx, "website")
     website = next(w for w in rt.offices.workflows(ctx) if w.workflow_key == "website")
-    assert website.settings == {"allow_missing": []}
+    assert website.settings == {"allow_missing": []}  # hiring Echo cleared the note
 
 
 def test_hiring_validates_config_and_names(make_runtime):

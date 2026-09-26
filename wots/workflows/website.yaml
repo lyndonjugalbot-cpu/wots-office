@@ -1,6 +1,6 @@
 # Website workflow (spec v2 §6). Atlas executes this; there is no pipeline logic in code.
 key: website
-version: 1
+version: 2
 work_item_kind: lead
 initial: NEW
 states:
@@ -42,6 +42,8 @@ transitions:
   - [READY_FOR_APPROVAL, DISQUALIFIED]
   - [APPROVED, PREVIEW_DEPLOYED]
   - [PREVIEW_DEPLOYED, PITCH_DRAFTED]
+  - [PREVIEW_DEPLOYED, DISQUALIFIED]      # suppressed address: never pitched (Phase 4)
+  - [PITCH_APPROVED, DISQUALIFIED]  # suppressed between approval and sending (Phase 4)
   - [PITCH_DRAFTED, PITCH_APPROVED]
   - [PITCH_DRAFTED, PREVIEW_DEPLOYED]     # rejected -> redraft
   - [PITCH_APPROVED, PITCHED]

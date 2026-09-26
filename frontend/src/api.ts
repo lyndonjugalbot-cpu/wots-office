@@ -1,4 +1,4 @@
-import type { Lead, LeadDetail, Me, OfficeAgent, Overview, Team, TradeList, WotsEvent } from "./types";
+import type { Lead, LeadDetail, Me, OfficeAgent, Overview, SuppressionEntry, Team, TradeList, WotsEvent } from "./types";
 
 /** Thrown on 401: the browser has no valid session cookie. */
 export class SignedOut extends Error {}
@@ -44,6 +44,19 @@ export const api = {
   reject: (id: string, notes: string) => post<Lead>(`${item(id)}/reject`, { notes }),
   disqualify: (id: string, reason: string) => post<Lead>(`${item(id)}/disqualify`, { reason }),
   resolve: (id: string, to_status: string, notes = "") => post<Lead>(`${item(id)}/resolve`, { to_status, notes }),
+  approvePitch: (id: string, edits: Record<string, { subject?: string; body?: string }>, notes = "") =>
+    post<Lead>(`${item(id)}/pitch/approve`, { edits, notes }),
+  rejectPitch: (id: string, notes: string) => post<Lead>(`${item(id)}/pitch/reject`, { notes }),
+  replied: (id: string, notes = "") => post<Lead>(`${item(id)}/replied`, { notes }),
+  close: (id: string, won: boolean, notes = "") => post<Lead>(`${item(id)}/close`, { won, notes }),
+  suppress: (id: string, reason: string) => post<Lead>(`${item(id)}/suppress`, { reason }),
+  contact: (id: string, body: { email?: string; contact_name?: string; found_at?: string }) =>
+    post<Lead>(`${item(id)}/contact`, body),
+  suppression: () => request<SuppressionEntry[]>("/api/suppression"),
+  addSuppression: (email: string, whole_domain: boolean, reason: string) =>
+    post<{ ok: boolean }>("/api/suppression", { email, whole_domain, reason }),
+  removeSuppression: (id: string) =>
+    request<{ ok: boolean }>(`/api/suppression/${encodeURIComponent(id)}`, { method: "DELETE" }),
   tick: () => post<{ ran: boolean; summary: string }>("/api/tick"),
   importSamples: () => post<{ created: number; skipped: string[] }>("/api/import-samples"),
   importCsv: (file: File, workflow: string) => {

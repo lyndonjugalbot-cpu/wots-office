@@ -1,7 +1,7 @@
 # Ad Refresh workflow (spec v2 §6). Transitions mirror the website workflow, without
 # COPY_READY / ASSETS_READY / deployment.
 key: ad_refresh
-version: 1
+version: 2
 work_item_kind: lead
 initial: NEW
 states:
@@ -39,6 +39,8 @@ transitions:
   - [READY_FOR_APPROVAL, NEEDS_FIX]
   - [READY_FOR_APPROVAL, DISQUALIFIED]
   - [APPROVED, PITCH_DRAFTED]
+  - [APPROVED, DISQUALIFIED]      # suppressed address: never pitched (Phase 4)
+  - [PITCH_APPROVED, DISQUALIFIED]  # suppressed between approval and sending (Phase 4)
   - [PITCH_DRAFTED, PITCH_APPROVED]
   - [PITCH_DRAFTED, APPROVED]             # rejected -> redraft
   - [PITCH_APPROVED, PITCHED]

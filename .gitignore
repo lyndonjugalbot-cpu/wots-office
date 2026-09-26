@@ -16,3 +16,8 @@ tools/node_modules/
 .env
 .DS_Store
 backups/
+
+# Mixamo characters/animations: licensed for use inside this app only, never shared as files.
+# Rebuild with scripts/mixamo/convert_mixamo.py from your own Mixamo downloads.
+assets/mixamo/
+frontend/public/characters/

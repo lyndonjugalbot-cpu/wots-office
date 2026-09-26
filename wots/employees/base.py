@@ -39,6 +39,15 @@ class EmployeeInfo:
     config: dict[str, Any]  # the hire's validated config (defaults filled in)
 
 
+class NotYet(Exception):
+    """The job can't run until later (e.g. outside the recipient's send window). Not a failure:
+    Atlas holds the item until `until` and tries again then."""
+
+    def __init__(self, until, note: str, announce: bool = True):
+        super().__init__(note)
+        self.until, self.note, self.announce = until, note, announce
+
+
 @dataclass
 class EmployeeContext:
     org: OrgContext
@@ -52,6 +61,7 @@ class EmployeeContext:
     effort: str | None = None
     feedback: str | None = None  # latest QA report or CEO notes when an item comes back
     tools: Any = None  # this office's integration clients (wots.integrations.toolbox.Toolbox)
+    now: Any = None  # Atlas's clock (naive UTC datetime) when the job started
 
 
 class Employee(Protocol):

@@ -276,13 +276,37 @@ def test_a_state_owned_by_a_type_nobody_holds_is_skipped(make_runtime):
 def test_the_per_office_job_cap(make_runtime):
     rt = make_runtime(atlas={"max_jobs_per_org_per_tick": 3})
     ctx = internal(rt)
+    rt.offices.fire(ctx, employee_id(rt, ctx, "Quill"))  # nobody downstream, so only the cap limits Ledger
     ledger = behave(rt, "Ledger", to("ENRICHED"))
     for i in range(5):
         force_status(rt, ctx, new_item(rt, name=f"B{i}"), "VERIFY")
-    rt.atlas.tick()
-    assert len(ledger.calls) == 3
-    rt.atlas.tick()
+    for _ in range(3):
+        report = rt.atlas.tick()
+        assert sum(report.ran.values()) <= 3
     assert len(ledger.calls) == 5
+
+
+def test_later_steps_go_first_so_new_leads_cant_starve_them(make_runtime):
+    """A big batch of new leads mustn't hold up approved sites waiting to be deployed."""
+    rt = make_runtime(atlas={"max_jobs_per_org_per_tick": 3})
+    ctx = internal(rt)
+    dock = behave(rt, "Dock", to("PREVIEW_DEPLOYED"))
+    behave(rt, "Scout", to("VERIFY"))
+    for i in range(20):
+        new_item(rt, name=f"New {i}")
+    approved = new_item(rt, name="Approved Site")
+    force_status(rt, ctx, approved, "APPROVED")
+    rt.atlas.tick()
+    assert [c[0] for c in dock.calls] == [approved]
+
+
+def test_an_item_that_doesnt_move_runs_once_per_tick(make_runtime):
+    rt = make_runtime()
+    quill = rt.fakes["Quill"]  # leaves items where they are
+    item = new_item(rt)
+    force_status(rt, internal(rt), item, "ENRICHED")
+    rt.atlas.tick()
+    assert len(quill.calls) == 1
 
 
 def test_every_office_gets_its_turn(make_runtime):
@@ -343,12 +367,11 @@ def test_a_type_without_an_implementation_waits(make_runtime):
     rt = make_runtime(fakes=False)
     ctx = internal(rt)
     staff = {st.info.name: st for st in rt.atlas.staff(ctx)}
-    assert staff["Ledger"].impl is not None
-    assert staff["Dock"].impl is None and staff["Lens"].impl is None
-    item = new_item(rt)
-    force_status(rt, ctx, item, "APPROVED")
+    assert staff["Ledger"].impl is not None and staff["Dock"].impl is not None
+    assert staff["Scout-Ads"].impl is None and staff["Lens"].impl is None
+    item = new_item(rt, workflow="ad_refresh")  # NEW belongs to the ad researcher (Phase 5)
     rt.atlas.tick()
-    assert rt.board.get(ctx, item).status == "APPROVED"
+    assert rt.board.get(ctx, item).status == "NEW"
     with rt.sessions() as s:
         assert not s.scalar(select(func.count()).select_from(Event).where(
             Event.org_id == ctx.org_id, Event.note.startswith("error:")))

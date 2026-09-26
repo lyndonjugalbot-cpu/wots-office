@@ -60,6 +60,8 @@ def web(monkeypatch) -> FakeWeb:
     """Every runtime's integrations go to this fake internet, with test keys for the internal office."""
     for key in ("GOOGLE_PLACES_KEY", "COMPANIES_HOUSE_KEY", "ABN_GUID"):
         monkeypatch.setenv(key, f"test-{key.lower()}")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "test-cloudflare-token")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "test-account")
     return FakeWeb()
 
 
@@ -88,7 +90,7 @@ def make_runtime(tmp_path, clock, web) -> Callable[..., Runtime]:
 
     def _make(fakes: bool = True, llm_client=None, **settings) -> Runtime:
         rt = build_runtime(config_for(tmp_path, **settings), clock=clock, llm_client=llm_client,
-                           http_transport=web.transport)
+                           http_transport=web.transport, preview_uploader=web.upload)
         rt.fakes = {}
         if fakes:
             for org in rt.offices.orgs():

@@ -60,6 +60,10 @@ class FakeWeb:
         self.ch_by_trade: dict[tuple[str, str], list[dict]] = {}  # (sic code, town lower case) -> companies
         self._bbox_town: dict[str, str] = {}
         self.overpass_busy = 0  # how many Overpass requests answer 504 before one works
+        self.site_headers: dict[str, dict] = {}  # host -> response headers for self.websites
+        self.pages_projects: dict[str, str] = {}  # Cloudflare Pages project -> subdomain
+        self.pages_deployments: list[dict] = []  # {"id", "project", "branch"}
+        self.pages_taken = False  # the project name is taken on pages.dev (Cloudflare adds a suffix)
         self.requests: list[httpx.Request] = []
         self.transport = httpx.MockTransport(self.handle)
 
@@ -82,9 +86,11 @@ class FakeWeb:
                 self.overpass_busy -= 1
                 return httpx.Response(504, text="Gateway Timeout")
             return self._overpass(request)
+        if host == "api.cloudflare.com":
+            return self._cloudflare(request)
         domain = host.removeprefix("www.")
         if domain in self.websites:
-            return httpx.Response(200, text=self.websites[domain])
+            return httpx.Response(200, text=self.websites[domain], headers=self.site_headers.get(domain, {}))
         raise httpx.ConnectError("no such host", request=request)
 
     def _places(self, request: httpx.Request) -> httpx.Response:
@@ -138,6 +144,39 @@ class FakeWeb:
                 "address_snippet": "Somewhere, UK"}
         item.update(self.companies.get(key, {}))
         return httpx.Response(200, json={"items": [item]})
+
+    def _cloudflare(self, request: httpx.Request) -> httpx.Response:
+        if request.headers.get("authorization") != "Bearer test-cloudflare-token":
+            return httpx.Response(403, json={"success": False, "errors": [{"message": "Authentication error"}]})
+        parts = request.url.path.split("/")  # /client/v4/accounts/{acc}/pages/projects[/{name}[/deployments[/{id}]]]
+        rest = parts[parts.index("projects") + 1:]
+        if request.method == "POST" and not rest:
+            name = json.loads(request.content)["name"]
+            self.pages_projects[name] = f"{name}{'-7xq' if self.pages_taken else ''}.pages.dev"
+            return httpx.Response(200, json={"success": True, "result": {"name": name, "subdomain": self.pages_projects[name]}})
+        name = rest[0]
+        if name not in self.pages_projects:
+            return httpx.Response(404, json={"success": False, "errors": [{"code": 8000007, "message": "Project not found"}]})
+        if len(rest) == 1:
+            return httpx.Response(200, json={"success": True, "result": {"name": name, "subdomain": self.pages_projects[name]}})
+        if request.method == "GET":
+            result = [{"id": d["id"], "deployment_trigger": {"metadata": {"branch": d["branch"]}}}
+                      for d in self.pages_deployments if d["project"] == name]
+            return httpx.Response(200, json={"success": True, "result": result})
+        self.pages_deployments = [d for d in self.pages_deployments if d["id"] != rest[2]]
+        return httpx.Response(200, json={"success": True, "result": None})
+
+    def upload(self, site, project: str, branch: str, token: str, account_id: str) -> str:
+        """Stands in for `wrangler pages deploy`: serves the folder at its branch URL."""
+        subdomain = self.pages_projects[project]
+        dep = {"id": f"dep{len(self.pages_deployments) + 1}", "project": project, "branch": branch}
+        self.pages_deployments.append(dep)
+        host = f"{branch}.{subdomain}"
+        self.websites[host] = (site / "index.html").read_text()
+        headers = (site / "_headers").read_text() if (site / "_headers").exists() else ""
+        self.site_headers[host] = {"x-robots-tag": "noindex, nofollow"} if "X-Robots-Tag: noindex" in headers else {}
+        return (f"Uploading... (3/3)\n✨ Deployment complete! Take a peek over at https://{dep['id']}.{subdomain}\n"
+                f"✨ Deployment alias URL: https://{host}\n")
 
     def _abn(self, request: httpx.Request) -> httpx.Response:
         params = parse_qs(request.url.query.decode())

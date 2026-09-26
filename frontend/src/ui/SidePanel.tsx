@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { Lead, OfficeAgent, Overview, Team as TeamData, WotsEvent } from "../types";
+import type { Lead, OfficeAgent, Overview, SuppressionEntry, Team as TeamData, WotsEvent } from "../types";
 
-type Tab = "activity" | "pipeline" | "leads" | "team";
+type Tab = "activity" | "pipeline" | "leads" | "team" | "outreach";
 
 interface Props {
   overview: Overview | null;
@@ -20,7 +20,7 @@ export function SidePanel({ overview, events, agents, onOpenLead, onSelectAgent,
   return (
     <aside className={`sidepanel panel ${collapsed ? "sidepanel--collapsed" : ""}`}>
       <div className="tabs" role="tablist">
-        {(["activity", "pipeline", "leads", "team"] as Tab[]).map((t) => (
+        {(["activity", "pipeline", "leads", "team", "outreach"] as Tab[]).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""}
             onClick={() => { setTab(t); setCollapsed(false); }}>
             {t}
@@ -36,6 +36,7 @@ export function SidePanel({ overview, events, agents, onOpenLead, onSelectAgent,
           {tab === "pipeline" && <Pipeline overview={overview} />}
           {tab === "leads" && <Leads onOpenLead={onOpenLead} />}
           {tab === "team" && <Team onChanged={onTeamChanged} />}
+          {tab === "outreach" && <Outreach overview={overview} />}
         </div>
       )}
     </aside>
@@ -215,6 +216,56 @@ function Team({ onChanged }: { onChanged: () => void }) {
         </form>
       )}
       {message && <p className="muted">{message}</p>}
+    </div>
+  );
+}
+
+/** Outreach status and the suppression list (spec v2 §12). */
+function Outreach({ overview }: { overview: Overview | null }) {
+  const [list, setList] = useState<SuppressionEntry[] | null>(null);
+  const [email, setEmail] = useState("");
+  const [domain, setDomain] = useState(false);
+  const [message, setMessage] = useState("");
+  const load = () => api.suppression().then(setList).catch((e: Error) => setMessage(e.message));
+  useEffect(() => {
+    load();
+  }, []);
+  const o = overview?.outreach;
+  return (
+    <div className="suppression">
+      {o && (
+        <p className="muted">
+          Sent today: {o.sent_today} of {o.daily_cap}.{" "}
+          {!o.terms_accepted && "Outreach terms not accepted yet (run `wots orgs accept-outreach-terms`). "}
+          {!o.mailbox && "No mailbox connected: pitches can only be saved to the outbox (dry run)."}
+        </p>
+      )}
+      <h3>Never email</h3>
+      <form onSubmit={async (e) => {
+        e.preventDefault();
+        try {
+          await api.addSuppression(email.trim(), domain, "added by hand");
+          setEmail("");
+          setMessage("");
+          load();
+        } catch (err) {
+          setMessage((err as Error).message);
+        }
+      }}>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@business.com" aria-label="Email to suppress" />
+        <label className="toggle"><input type="checkbox" checked={domain} onChange={(e) => setDomain(e.target.checked)} /> Whole domain</label>
+        <button className="btn" disabled={!email.includes("@")}>Add</button>
+      </form>
+      {message && <p className="error">{message}</p>}
+      <ul className="history">
+        {(list ?? []).map((s) => (
+          <li key={s.id} className="team__row">
+            <span><b>{s.email ?? `*@${s.domain}`}</b><small className="muted">{s.reason} · {new Date(s.added_at).toLocaleDateString()}</small></span>
+            <button className="btn btn--small" onClick={() => api.removeSuppression(s.id).then(load).catch((e: Error) => setMessage(e.message))}>Remove</button>
+          </li>
+        ))}
+        {list && !list.length && <li className="muted">Nobody yet.</li>}
+      </ul>
     </div>
   );
 }

@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Lead, LeadDetail } from "../types";
 
-type Tab = "approvals" | "escalations";
+import { PitchReview, ReplyReview } from "./PitchReview";
+
+type Tab = "approvals" | "pitches" | "replies" | "escalations";
+const STATUS: Record<Tab, string> = { approvals: "READY_FOR_APPROVAL", pitches: "PITCH_DRAFTED", replies: "REPLIED", escalations: "ESCALATED" };
+const LABELS: Record<Tab, string> = { approvals: "Sites", pitches: "Pitches", replies: "Replies", escalations: "Escalated" };
+const EMPTY: Record<Tab, string> = { approvals: "No sites waiting for approval.", pitches: "No pitches to approve.",
+  replies: "No replies waiting.", escalations: "No escalations." };
 const WIDTHS = [375, 768, 1440] as const;
 
 export function ApprovalQueue({ onClose, onChanged, onOpenLead }: {
@@ -13,7 +19,7 @@ export function ApprovalQueue({ onClose, onChanged, onOpenLead }: {
   const [selected, setSelected] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const leads = await api.leads(tab === "approvals" ? "READY_FOR_APPROVAL" : "ESCALATED");
+    const leads = await api.leads(STATUS[tab]);
     setItems(leads);
     setSelected((cur) => (cur && leads.some((l) => l.id === cur) ? cur : leads[0]?.id ?? null));
   }, [tab]);
@@ -41,8 +47,9 @@ export function ApprovalQueue({ onClose, onChanged, onOpenLead }: {
         <div className="modal__head">
           <strong>CEO desk</strong>
           <div className="tabs tabs--inline" role="tablist">
-            <button role="tab" aria-selected={tab === "approvals"} className={tab === "approvals" ? "active" : ""} onClick={() => setTab("approvals")}>To approve</button>
-            <button role="tab" aria-selected={tab === "escalations"} className={tab === "escalations" ? "active" : ""} onClick={() => setTab("escalations")}>Escalated</button>
+            {(Object.keys(LABELS) as Tab[]).map((t) => (
+              <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{LABELS[t]}</button>
+            ))}
           </div>
           <button className="close" onClick={onClose} aria-label="Close">×</button>
         </div>
@@ -56,9 +63,13 @@ export function ApprovalQueue({ onClose, onChanged, onOpenLead }: {
                 </button>
               </li>
             ))}
-            {!items.length && <li className="muted queue__empty">{tab === "approvals" ? "Nothing waiting for approval." : "No escalations."}</li>}
+            {!items.length && <li className="muted queue__empty">{EMPTY[tab]}</li>}
           </ul>
-          {selected ? (
+          {selected && tab === "pitches" ? (
+            <PitchReview key={selected} id={selected} onDone={done} onOpenLead={onOpenLead} />
+          ) : selected && tab === "replies" ? (
+            <ReplyReview key={selected} id={selected} onDone={done} onOpenLead={onOpenLead} />
+          ) : selected ? (
             <Review key={selected} id={selected} mode={tab} onDone={done} onOpenLead={onOpenLead} />
           ) : (
             <div className="queue__detail muted">All clear.</div>

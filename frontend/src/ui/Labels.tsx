@@ -13,13 +13,13 @@ export function Labels({ agents, selected }: { agents: OfficeAgent[]; selected: 
         const [x, , z] = spot.position;
         return (
           <div key={member.id}>
-            <div className="label" ref={(el) => registerLabel(`${member.id}:tag`, [x, 0.05, z + 0.95], el)}>
+            <div className="label" ref={(el) => registerLabel(`${member.id}:tag`, [x, 0.05, z + 1.55], el)}>
               <div className={`nametag ${selected === member.id ? "nametag--selected" : ""}`}>
                 {member.name}
                 <span>{member.title}</span>
               </div>
             </div>
-            <div className="label label--bubble" ref={(el) => registerLabel(`${member.id}:bubble`, [x, 2.75, z], el)}>
+            <div className="label label--bubble" ref={(el) => registerLabel(`${member.id}:bubble`, [x, 2.35, z], el)}>
               {member.bubble ? <div className={`bubble bubble--${member.status}`}>{member.bubble}</div> : null}
             </div>
           </div>

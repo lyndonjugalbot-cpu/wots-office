@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { PitchMessage } from "../types";
 import { api } from "../api";
 import type { LeadDetail as Detail } from "../types";
 
@@ -38,6 +39,8 @@ export function LeadDetail({ id, onClose }: { id: string; onClose: () => void })
                   ) : null,
                 )}
               </dl>
+              <PreviewLine item={detail.item} />
+              <ContactEditor id={id} item={detail.item} suppressed={detail.suppressed} pitch={detail.pitch} />
               <Verification item={detail.item} />
               {detail.artifacts.length > 0 && (
                 <>
@@ -99,6 +102,69 @@ function Verification({ item }: { item: Detail["item"] }) {
           </li>
         )}
       </ul>
+    </>
+  );
+}
+
+/** Where Dock published the approved site (Phase 3). */
+function PreviewLine({ item }: { item: Detail["item"] }) {
+  const p = item.checks?.preview;
+  if (!p) return null;
+  return (
+    <p className="preview-line">
+      <b>Preview:</b>{" "}
+      {p.removed_at ? <span className="muted">taken down {new Date(p.removed_at + "Z").toLocaleDateString()}</span>
+        : p.live ? <a className="linkbtn" href={p.url} target="_blank" rel="noreferrer">{p.url}</a>
+        : <span className="muted">dry run: kept locally, not published</span>}
+    </p>
+  );
+}
+
+/** Add the email address a business publishes (e.g. on its Facebook page) so Echo can pitch it,
+ * or put the address on the suppression list. */
+function ContactEditor({ id, item, suppressed, pitch }: {
+  id: string; item: Detail["item"]; suppressed: string | null; pitch: Detail["pitch"];
+}) {
+  const [email, setEmail] = useState(item.email ?? "");
+  const [name, setName] = useState(item.contact_name ?? "");
+  const [foundAt, setFoundAt] = useState(item.checks?.email?.found_at ?? "");
+  const [message, setMessage] = useState("");
+  const save = async () => {
+    try {
+      await api.contact(id, { email, contact_name: name, found_at: foundAt || undefined });
+      setMessage("Saved.");
+    } catch (e) {
+      setMessage((e as Error).message);
+    }
+  };
+  const suppress = async () => {
+    if (!window.confirm(`Never email ${item.email} again?`)) return;
+    try {
+      await api.suppress(id, "asked not to be contacted");
+      setMessage("Suppressed.");
+    } catch (e) {
+      setMessage((e as Error).message);
+    }
+  };
+  const sent = (m?: PitchMessage) => m && (m.sent_at ? `sent ${new Date(m.sent_at).toLocaleString()}`
+    : m.scheduled_for ? `scheduled for ${new Date(m.scheduled_for).toLocaleString()}` : m.status);
+  return (
+    <>
+      <h3>Contact</h3>
+      {suppressed && <p className="warning panel">Suppressed: {suppressed}. We won't email this address.</p>}
+      {(pitch.initial || pitch.followup) && (
+        <p className="muted">Pitch: {sent(pitch.initial)}{pitch.followup ? ` · follow-up: ${sent(pitch.followup)}` : ""}</p>
+      )}
+      <form className="contact-form" onSubmit={(e) => { e.preventDefault(); save(); }}>
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email address" aria-label="Email address" />
+        <input value={foundAt} onChange={(e) => setFoundAt(e.target.value)} placeholder="Where they publish it (a link), needed for AU leads" aria-label="Where the email is published" />
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Contact name (optional)" aria-label="Contact name" />
+        <div className="plan__actions">
+          {item.email && !suppressed && <button type="button" className="btn btn--danger" onClick={suppress}>Never email</button>}
+          <button className="btn btn--primary">Save contact</button>
+        </div>
+      </form>
+      {message && <p className="muted">{message}</p>}
     </>
   );
 }

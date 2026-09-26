@@ -11,6 +11,7 @@
   wots workflows validate
   wots research --country UK --trade plumber --regions "Manchester,Leeds" [--source osm|companies_house]
   wots integrations connect --org X --kind places|companies_house|abn   (asks for the key)
+  wots mailbox check [--org X]                 log in to the office mailbox (SMTP + IMAP); sends nothing
   wots login-link [--email you@example.com]    a sign-in link for the dashboard
   wots trial NAME [--set Pixel.effort=low]     try model/effort settings on the sample leads
   wots compare NAME NAME ...                   side-by-side report of trials
@@ -33,6 +34,25 @@ CSV_FIELDS = {"category", "description", "region", "timezone", "address", "phone
               "website_found", "source_ref"}
 COUNTRY_ALIASES = {"US": "US", "USA": "US", "UK": "UK", "GB": "UK", "AU": "AU", "AUS": "AU"}
 INTERNAL = "wots-office"
+OUTREACH_TERMS = """
+Outreach terms for {office}
+---------------------------
+Before an Outreach Specialist emails anyone for this office, the owner agrees that:
+
+1. Emails go only to businesses, about our services, from the office's own mailbox, and only after a
+   person approves each pitch (auto-send stays off).
+2. The office follows the anti-spam law of each recipient's country, including:
+   - US (CAN-SPAM): honest subject lines, a real postal address, a working opt-out honoured within 10 business days.
+   - UK (PECR / UK GDPR): only incorporated businesses (ltd, plc, llp) without consent; say who we are and
+     where we found their details; stop at once when asked.
+   - AU (Spam Act 2003): only addresses the business publishes itself, with a message relevant to its
+     business; identify the sender; honour opt-outs within 5 business days.
+   And the law where the office sends from (NZ: Unsolicited Electronic Messages Act 2007).
+3. Anyone who opts out, replies "not interested" or bounces is never emailed again.
+4. Every email carries this postal address, which must be real and current:
+     {address}
+5. Wots Office's checks help, but they are not legal advice; the office is responsible for what it sends.
+"""
 
 
 def import_csv(rt: Runtime, ctx: OrgContext, lines, filename: str, workflow: str) -> tuple[int, list[str]]:
@@ -175,8 +195,18 @@ def cmd_orgs(rt: Runtime, args) -> int:
             for org in rt.offices.orgs():
                 print(f"{org.slug:<20} {org.name}{'  (internal)' if org.is_internal else ''}  [{org.status}]")
         elif args.orgs_cmd == "accept-outreach-terms":
-            rt.offices.accept_outreach_terms(rt.offices.system_ctx(args.org), args.postal_address)
-            print("Outreach terms accepted. You can now hire an Outreach Specialist.")
+            ctx = rt.offices.system_ctx(args.org)
+            print(OUTREACH_TERMS.format(office=ctx.name, address=args.postal_address.strip()))
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    print("Run this in a terminal to confirm, or add --yes.", file=sys.stderr)
+                    return 1
+                if input("Type 'I agree' to accept: ").strip().lower() != "i agree":
+                    print("Not accepted.")
+                    return 1
+            rt.offices.accept_outreach_terms(ctx, args.postal_address)
+            print("Outreach terms accepted. You can now hire an Outreach Specialist:\n"
+                  f"  bin/wots employees hire --org {ctx.slug} --type cold_email --name Echo")
     except OfficeError as e:
         print(e, file=sys.stderr)
         return 1
@@ -293,6 +323,44 @@ def cmd_integrations(rt: Runtime, args) -> int:
     return 0
 
 
+def cmd_mailbox(rt: Runtime, args) -> int:
+    """Check the office mailbox settings by logging in. Nothing is sent."""
+    import imaplib
+    import smtplib
+
+    ctx = rt.offices.system_ctx(args.org)
+    tools = rt.integrations.for_office(ctx)
+    box, password = tools.mailbox(), tools.secret("email")
+    print(f"From: {box.get('from') or '(OUTREACH_FROM not set)'}")
+    ok = True
+    if not (box.get("smtp_host") and box.get("username") and password):
+        print("SMTP: not set up (SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD)")
+        ok = False
+    else:
+        port = int(box.get("smtp_port") or 587)
+        try:
+            server = smtplib.SMTP_SSL(box["smtp_host"], port, timeout=20) if port == 465 else smtplib.SMTP(box["smtp_host"], port, timeout=20)
+            with server:
+                if port != 465:
+                    server.starttls()
+                server.login(box["username"], password)
+            print(f"SMTP: logged in to {box['smtp_host']}:{port} as {box['username']}")
+        except (smtplib.SMTPException, OSError) as e:
+            print(f"SMTP: failed ({e})")
+            ok = False
+    if box.get("imap_host"):
+        try:
+            with imaplib.IMAP4_SSL(box["imap_host"], int(box.get("imap_port") or 993)) as imap:
+                imap.login(box["username"], password)
+            print(f"IMAP: logged in to {box['imap_host']} (replies and opt-outs will be read)")
+        except (imaplib.IMAP4.error, OSError) as e:
+            print(f"IMAP: failed ({e})")
+            ok = False
+    else:
+        print("IMAP: not set up (IMAP_HOST); mark replies by hand in the dashboard")
+    return 0 if ok else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wots", description="Wots Office")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -321,6 +389,7 @@ def main(argv: list[str] | None = None) -> int:
     terms = orgs.add_parser("accept-outreach-terms")
     terms.add_argument("--org", default=INTERNAL)
     terms.add_argument("--postal-address", required=True)
+    terms.add_argument("--yes", action="store_true", help="accept without the prompt")
 
     emps = sub.add_parser("employees", help="hire, list and fire employees").add_subparsers(dest="emp_cmd", required=True)
     hire = emps.add_parser("hire")
@@ -345,7 +414,11 @@ def main(argv: list[str] | None = None) -> int:
     integ = sub.add_parser("integrations", help="an office's API keys").add_subparsers(dest="int_cmd", required=True)
     connect = integ.add_parser("connect")
     connect.add_argument("--org", default=INTERNAL)
-    connect.add_argument("--kind", required=True, choices=["places", "companies_house", "abn"])
+    connect.add_argument("--kind", required=True, choices=["places", "companies_house", "abn", "cloudflare", "email"])
+
+    mailbox = sub.add_parser("mailbox", help="the office mailbox used for outreach").add_subparsers(dest="mb_cmd", required=True)
+    mb_check = mailbox.add_parser("check")
+    mb_check.add_argument("--org", default=INTERNAL)
 
     wfs = sub.add_parser("workflows", help="workflow definitions").add_subparsers(dest="wf_cmd", required=True)
     wfs.add_parser("validate")
@@ -369,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
     rt = build_runtime()
     handlers = {"run": cmd_run, "tick": cmd_tick, "import-leads": cmd_import_leads, "status": cmd_status,
                 "orgs": cmd_orgs, "employees": cmd_employees, "workflows": cmd_workflows, "login-link": cmd_login_link,
-                "research": cmd_research, "integrations": cmd_integrations}
+                "research": cmd_research, "integrations": cmd_integrations, "mailbox": cmd_mailbox}
     try:
         return handlers[args.command](rt, args)
     except NotFound as e:

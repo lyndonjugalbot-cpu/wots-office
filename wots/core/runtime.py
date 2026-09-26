@@ -37,7 +37,7 @@ class Runtime:
 
 
 def build_runtime(config: Config | None = None, *, clock: Clock = utcnow, migrate: bool = True, llm_client=None,
-                  queue: JobQueue | None = None, http_transport=None) -> Runtime:
+                  queue: JobQueue | None = None, http_transport=None, preview_uploader=None) -> Runtime:
     config = config or get_config()
     settings = config.settings
     install_query_guard()  # every tenant-table query must filter by org_id
@@ -53,6 +53,6 @@ def build_runtime(config: Config | None = None, *, clock: Clock = utcnow, migrat
     meter = Meter(sessions, config, clock, client=llm_client)
     offices = Offices(sessions, catalogue, clock)
     atlas = Atlas(sessions, config, catalogue, board, meter, files, notifier, queue or InlineQueue(), clock)
-    integrations = Integrations(sessions, config, transport=http_transport)
+    integrations = Integrations(sessions, config, transport=http_transport, uploader=preview_uploader, clock=clock)
     atlas.integrations = integrations
     return Runtime(config, engine, sessions, catalogue, board, meter, files, notifier, offices, atlas, integrations)

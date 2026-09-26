@@ -20,20 +20,12 @@ from ...core.config import ROOT
 from ...core.metering import LLMError
 from ..base import ArtifactOut, BaseEmployee, EmployeeContext, EmployeeResult
 from .copywriter import COPY_SCHEMA
-from .graphic_designer import KEYWORDS, darken_until, family_for
+from .graphic_designer import ICONS, KEYWORDS, darken_until, family_for
 
 TEMPLATES = ROOT / "templates" / "sites"
 STYLE_FILES = {"clean_modern": "clean-modern.css", "bold_warm": "bold-warm.css", "minimal": "minimal.css",
                "playful": "playful.css"}
 STYLE_NAMES = {"clean_modern": "clean & modern", "bold_warm": "bold & warm", "minimal": "minimal", "playful": "playful"}
-# Simple line icons per business family (inline SVG, decorative)
-ICONS = {
-    "trades": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-2.5z"/></svg>',
-    "food": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 3v8a3 3 0 0 0 6 0V3M7 3v18M17 3c-2 2-3 5-3 8h3v10"/></svg>',
-    "beauty": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg>',
-    "retail": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8h14l-1 13H6zM9 8V6a3 3 0 0 1 6 0v2"/></svg>',
-    "professional": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16v12H4zM9 7V5h6v2M4 12h16"/></svg>',
-}
 
 FAMILIES = ["professional", *[f for f in KEYWORDS if f != "professional"]]
 REVISION_SCHEMA = {
@@ -75,8 +67,9 @@ class WebDeveloper(BaseEmployee):
             shutil.rmtree(site)  # a rebuild (e.g. after QA feedback) starts clean
         (site / "assets").mkdir(parents=True)
         logo = ctx.item_dir / "assets" / "logo.svg"
-        if logo.exists():
-            shutil.copy(logo, site / "assets" / "logo.svg")
+        for name in ("logo.svg", "mark.svg", "hero.svg", "og.png"):  # the graphic designer's work, if any
+            if (ctx.item_dir / "assets" / name).exists():
+                shutil.copy(ctx.item_dir / "assets" / name, site / "assets" / name)
         logo_width = int(re.search(r'width="(\d+)"', logo.read_text()).group(1)) if logo.exists() else 200
 
         html = _env.get_template(f"{brand['family']}.html").render(
@@ -89,6 +82,9 @@ class WebDeveloper(BaseEmployee):
             phone_href=re.sub(r"[^\d+]", "", lead.phone or ""),
             map_url=f"https://www.google.com/maps/search/?api=1&query={quote_plus(lead.address or '')}",
             logo_width=logo_width,
+            has_mark=(site / "assets" / "mark.svg").exists(),
+            hero_art=(site / "assets" / "hero.svg").exists(),
+            has_og=(site / "assets" / "og.png").exists(),
             gallery=[],  # only real photos may go here (Phase 3); none exist yet
             year=date.today().year,
         )

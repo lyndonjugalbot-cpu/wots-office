@@ -9,23 +9,6 @@ import { SidePanel } from "./ui/SidePanel";
 import { TopBar } from "./ui/TopBar";
 import { useSession, useWots } from "./useWots";
 
-function saved<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw === null ? fallback : (JSON.parse(raw) as T);
-  } catch {
-    return fallback;
-  }
-}
-
-function remember(key: string, value: unknown) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* private mode: preferences just won't persist */
-  }
-}
-
 export default function App() {
   const session = useSession();
   if (session.signedOut) return <SignIn />;
@@ -48,7 +31,6 @@ function SignIn({ message }: { message?: string }) {
 
 function Office({ session }: { session: ReturnType<typeof useSession> }) {
   const { overview, agents, events, connected, signedOut, refresh } = useWots(session.office);
-  const [retro, setRetro] = useState(() => saved("wots.retro", false));
   const [autoRotate, setAutoRotate] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
@@ -86,7 +68,7 @@ function Office({ session }: { session: ReturnType<typeof useSession> }) {
 
   return (
     <div className="app">
-      <Scene agents={agents} board={board} selected={selected} onSelect={selectAgent} retro={retro} autoRotate={autoRotate} />
+      <Scene agents={agents} board={board} selected={selected} onSelect={selectAgent} autoRotate={autoRotate} />
       <Labels agents={agents} selected={selected} />
 
       <TopBar
@@ -102,11 +84,6 @@ function Office({ session }: { session: ReturnType<typeof useSession> }) {
         connected={connected}
         onOpenQueue={() => setQueueOpen(true)}
         onRefresh={refresh}
-        retro={retro}
-        onRetro={(v) => {
-          setRetro(v);
-          remember("wots.retro", v);
-        }}
         autoRotate={autoRotate}
         onAutoRotate={setAutoRotate}
       />

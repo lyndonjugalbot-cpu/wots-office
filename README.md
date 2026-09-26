@@ -8,10 +8,10 @@ Since spec v2 it is multi-tenant: every piece of data belongs to an **office**. 
 |---|---|---|
 | 0 | Multi-tenant core: offices, users, roles, employee catalogue, workflows as YAML, org-scoped data with a query guard, FileStore, job queue, metering + credits, v1 migration | **Done** |
 | 1 | Website workflow: CSV → Scout (pass-through) → Ledger → Quill → Iris → Pixel/Nova → Hawk → CEO approval | **Done**: acceptance test passes on v2 |
-| 2 | Real leads: Google Places research; verification (dedupe, no-website checks, Companies House, ABN Lookup, country rules) | **Built:** OpenStreetMap + Companies House (free). Needs the free Companies House / ABN keys; the scraper waits for its format |
-| 3 | Next. Assets & previews (Dock) | |
-| 4 | Outreach, manual send (Echo; needs the outreach terms) | |
-| 5 | Ad Refresh workflow | |
+| 2 | Real leads: OpenStreetMap / Companies House research; verification (dedupe, no-website checks, Companies House, ABN Lookup, country rules) | **Built:** OpenStreetMap + Companies House (free). Needs the free Companies House / ABN keys; the scraper waits for its format |
+| 3 | Assets & previews: logo, hero and share image; Dock publishes approved sites as noindexed Cloudflare Pages previews and takes down stale ones | **Built:** needs a free Cloudflare account for real previews |
+| 4 | Outreach, manual send: Echo drafts compliant pitches, CEO pitch queue, sends in the recipient's window from your own mailbox, suppression, one follow-up, replies and opt-outs | **Built:** needs your postal address and a mailbox to send for real |
+| 5 | Next. Ad Refresh workflow | |
 | 6 | Hardening + HR / Team Manager | |
 | 7–9 | SaaS foundations, customer app & billing, catalogue growth | |
 
@@ -124,6 +124,54 @@ A missing or rejected key pauses only the work that needs it. Atlas tells you on
 
 **The existing scraper** is internal-only, behind the office setting `internal_scraper_enabled`, as the spec requires. It needs the scraper's input/output format before it can be wired in.
 
+## Designs and previews (Phase 3)
+
+**The Graphic Designer (Iris or Juno) draws each business's brand**, in the designer's style (`flat_brand`, `bold_playful` or `minimal`):
+- a logo and a square mark, used for the favicon
+- a decorative hero illustration made of brand colours, shapes and the trade's icon
+- a 1200×630 share image for link previews in email and chat
+- PNG copies for emails
+
+It never makes up photos. The gallery stays empty until the business supplies real ones. The files and palette are listed in `design_manifest.json`.
+
+**Dock publishes each approved site** as a preview on **Cloudflare Pages**. Its free plan allows commercial use; Vercel's free plan doesn't.
+- All previews share one Pages project, and each site is a branch with a stable URL: `https://{business-name-id}.{project}.pages.dev`.
+- Each preview is noindexed three ways: the page's robots tag, an `X-Robots-Tag` header and `robots.txt`.
+- Dock loads the live URL and checks that it works and is noindexed before marking the lead `PREVIEW_DEPLOYED`.
+- A site without a robots `noindex` tag is never published.
+- In dry-run mode nothing is published. Dock keeps a local copy in `data/previews/`, and the lead gets no preview URL, so nothing downstream can send a link that doesn't work.
+- A `LOST` lead's preview is taken down after `previews.preview_ttl_days` (30).
+
+**Setup:**
+1. Create a free Cloudflare account.
+2. Make an API token with **Account → Cloudflare Pages → Edit** permission.
+3. Put `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in `.env`.
+4. Run `cd tools && npm install`, which installs Cloudflare's `wrangler` CLI for uploads.
+
+The Pages project is created the first time Dock deploys.
+
+## Outreach (Phase 4)
+
+**Getting ready:**
+1. Accept the outreach terms and set the postal address for the email footers: `bin/wots orgs accept-outreach-terms --postal-address "..."`.
+2. Hire Echo: `bin/wots employees hire --type cold_email --name Echo`.
+3. Connect **your own** mailbox in `.env` (`SMTP_*`, `OUTREACH_FROM`, and optionally `IMAP_*`), then run `bin/wots mailbox check`. Most email services (SendGrid, Postmark, Mailgun and others) forbid cold outreach, so pitches go from your mailbox.
+
+**The flow:**
+1. **Echo drafts** each deployed site's pitch and its one follow-up.
+   - Claude writes only the subject line and a one-line opener, from the lead's real details.
+   - The body comes from `templates/email/`. The footer is added in code: who we are, the postal address, how to opt out, and (UK) where we found them.
+   - Echo won't draft if the address is suppressed or there's no email. For UK leads we must say where we found them, and for AU leads the business must publish the address itself. If Echo can't tell, it asks you (escalates) to add that on the lead.
+2. **You approve** in **Approvals → Pitches**. You can edit the subject and body, but the opt-out line must stay, or send it back with notes.
+3. **Echo sends** the approved pitch in the recipient's local window (Tue–Thu 9–11am) and within the daily cap (20). Otherwise it's scheduled, not failed. Suppression is checked again just before sending.
+4. **After sending:**
+   - If there's no reply after 5 days, the approved follow-up goes out, threaded under the pitch.
+   - After 5 more days the lead closes as LOST.
+   - With IMAP set up, the mailbox is read every 5 minutes. Opt-outs ("unsubscribe", "not interested", "remove me") and bounces are suppressed at once and the lead is LOST. Real replies land in **Approvals → Replies** for you to close as Won or Lost. Without IMAP, mark replies by hand.
+   - **Outreach → Never email** holds the suppression list. Addresses or whole company domains can be added; webmail domains like gmail.com can't be blocked as a whole.
+
+**Dry run** saves every "sent" email as a `.eml` file in `data/outbox/{office}/emails/`. A pitch drafted in dry-run mode has a placeholder instead of a preview link, and it can never be sent for real.
+
 ## Tuning cost
 
 Each employee's `model` and `effort` are part of their hire config: `bin/wots employees hire … --config effort=low`, or `update_employee`. To try settings on the 4 sample leads without touching the real office:
@@ -146,13 +194,17 @@ Each trial runs the real pipeline (real Claude, browser and Lighthouse) in its o
 4. **Leads start at `NEW`,** which the lead researcher owns. Research runs create them there, and Scout passes each one, including CSV imports, on to `VERIFY`.
 6. **UK leads with no Companies House match are dropped.** A limited company must be registered, so no match most likely means a sole trader or partnership. If a trading name differs from the registered name we lose a lead, which is the safe way round.
 7. **Research skips businesses whose listing shows a real website.** Ledger still checks likely domains for the rest.
-8. **Google Places is off** because of its terms (see Finding leads). The spec asked for it; we switched it off after reading Google's terms.
+8. **Previews use Cloudflare Pages, not the spec's Vercel,** because Vercel's free plan forbids commercial use. The spec's open question (one project per site vs a shared project) is answered: one shared project, with a branch per site.
+9. **Suppressed addresses can be dropped after approval:** `PREVIEW_DEPLOYED → DISQUALIFIED` and `PITCH_APPROVED → DISQUALIFIED` were added to the workflows (now version 2).
+10. **You approve the follow-up together with the pitch,** so it can go out 5 days later without asking again.
+11. **Dispatch finishes work first:** each tick's job budget goes to the latest pipeline steps first, so a big batch of new leads can't hold up approved sites or pitches.
+12. **Google Places is off** because of its terms (see Finding leads). The spec asked for it; we switched it off after reading Google's terms.
 5. **Dashboard:** it's still the 3D office (React + Three.js) on a JSON API, not HTMX, as agreed for v1. Local sign-in is a signed link; Supabase Auth replaces it in Phase 7.
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q            # all 123, about 2 minutes
+.venv/bin/python -m pytest -q            # all 169, about 2 minutes
 .venv/bin/python -m pytest -q -m "not e2e"   # skip the browser/Lighthouse runs
 ```
 
@@ -173,6 +225,8 @@ Each test gets a real SQLite database (migrated with Alembic, so it starts with 
 - the v1 → v2 migration
 - the CLI
 - Phase 2: research paging, metering and the daily cap, and the scraper being internal-only
+- Phase 4: per-country pitches and footers, suppression at draft and send, local send windows, the daily cap, dry-run outbox, follow-up then LOST, replies/opt-outs/bounces, the pitch queue
+- Phase 3: the designer's files and styles; previews are published, checked for noindex, kept local in dry runs, and taken down after the TTL
 - Phase 2 verification: 50 leads per country, with UK sole traders, real-domain businesses, cancelled ABNs and duplicates dropped with reasons
 - Phase 1 acceptance: 4 sample leads reach APPROVED, a broken site is caught and fixed, a CEO rejection is revised, and WIP never goes above 2
 

@@ -148,6 +148,20 @@ class Board:
             self.notifier.send(ctx, f"[{ctx.name}] {name} ({wf.key}) is now {to_status}" + (f": {note}" if note else ""))
         return view
 
+    def update_profile(self, ctx: OrgContext, item_id: str, updates: dict[str, Any], actor_kind: str,
+                       actor_id: str | None, note: str) -> None:
+        """Change lead details without a status change (e.g. a preview taken down), and log it."""
+        bad = set(updates) - PROFILE_FIELDS
+        if bad:
+            raise ValueError(f"Not lead profile fields: {', '.join(sorted(bad))}")
+        with self.sessions.begin() as s:
+            item = one_or_404(s, WorkItem, ctx, id=item_id)
+            profile = one_or_404(s, LeadProfile, ctx, work_item_id=item_id)
+            for key, value in updates.items():
+                setattr(profile, key, value)
+            profile.updated_at = self.clock()
+            self._event(s, ctx, item_id, item.status, item.status, actor_kind, actor_id, note)
+
     def log(self, ctx: OrgContext, item_id: str | None, actor_kind: str, actor_id: str | None, note: str) -> None:
         """Record something that isn't a status change (errors, budget pauses)."""
         with self.sessions.begin() as s:

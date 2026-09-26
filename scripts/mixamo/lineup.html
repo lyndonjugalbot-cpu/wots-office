@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- Renders every converted character side by side (for choosing who plays whom). -->
+<style>body{margin:0;background:#e9edf2;font:14px -apple-system,sans-serif} #labels{position:absolute;bottom:8px;left:0;right:0;display:flex}
+#labels div{flex:1;text-align:center}</style>
+<div id="labels"></div>
+<script type="importmap">
+{ "imports": { "three": "/frontend/node_modules/three/build/three.module.js",
+               "three/addons/": "/frontend/node_modules/three/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+const manifest = await (await fetch("/frontend/public/characters/manifest.json")).json();
+const n = manifest.characters.length;
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#e9edf2");
+scene.add(new THREE.HemisphereLight("#ffffff", "#bbaa99", 1.2));
+const sun = new THREE.DirectionalLight("#ffffff", 1.6); sun.position.set(2, 4, 5); scene.add(sun);
+const cam = new THREE.PerspectiveCamera(20, innerWidth / innerHeight, 0.1, 100);
+cam.position.set(0, 1.0, 14); cam.lookAt(0, 0.95, 0);
+const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+const labels = document.getElementById("labels");
+for (const [i, c] of manifest.characters.entries()) {
+  const g = await loader.loadAsync(`/frontend/public/characters/${c.file}`);
+  g.scene.scale.setScalar(1.75 / c.height);
+  g.scene.position.x = (i - (n - 1) / 2) * 1.05;
+  scene.add(g.scene);
+  const d = document.createElement("div"); d.textContent = c.id; labels.append(d);
+}
+renderer.render(scene, cam);
+window.done = true;
+</script>

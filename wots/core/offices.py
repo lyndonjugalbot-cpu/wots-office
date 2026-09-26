@@ -192,6 +192,15 @@ class Offices:
             s.flush()
             s.add(AuditLog(org_id=ctx.org_id, user_id=ctx.user_id, action="employee.hire", target=emp.id,
                            meta={"type": type_key, "name": name, "config": validated}, ts=self.clock()))
+            # Workflows that were running without this type no longer wait for it
+            for ow in s.scalars(scoped(OrgWorkflow, ctx)):
+                missing = list((ow.settings or {}).get("allow_missing", []))
+                if type_key in missing:
+                    missing.remove(type_key)
+                    settings = {**ow.settings, "allow_missing": missing}
+                    if not missing:
+                        settings.pop("missing_reason", None)
+                    ow.settings = settings
             return emp
 
     def fire(self, ctx: OrgContext, employee_id: str) -> None:

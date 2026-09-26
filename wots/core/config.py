@@ -48,12 +48,16 @@ class Pricing(_Strict):
 
 
 class OutreachSettings(_Strict):
-    daily_send_cap: int = 20
+    daily_send_cap: int = 20                 # per office, emails of any kind
     followup_after_days: int = 5
+    sender_name: str = "Lyndon"              # signs the pitches; the office name follows
+    pricing: dict[str, str] = Field(default_factory=dict)  # per country, e.g. {"US": "from $450"}; empty = no price
+    reply_check_minutes: int = 5             # how often to read the mailbox for replies and opt-outs
 
 
 class PreviewSettings(_Strict):
     preview_ttl_days: int = 30
+    cloudflare_project: str = "wots-previews"  # one Pages project; each site is a branch in it
 
 
 class ResearchSettings(_Strict):

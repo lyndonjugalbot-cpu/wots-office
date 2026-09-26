@@ -1,4 +1,6 @@
-{#- Base one-page site. Category templates override the blocks; style profiles supply the CSS. -#}
+{#- Base one-page site (Phase 3+ design). Family templates override the wording blocks; the style
+    profile supplies fonts and shapes (styles/*.css); the brand colours come from the designer.
+    Every fact on the page comes from the lead record or the copywriter's copy: nothing is invented. -#}
 <!doctype html>
 <html lang="{{ locale }}">
 <head>
@@ -7,7 +9,15 @@
   <meta name="robots" content="noindex, nofollow">
   <title>{{ copy.seo_title }}</title>
   <meta name="description" content="{{ copy.meta_description }}">
-  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <meta name="theme-color" content="{{ brand.primary }}">
+  <link rel="icon" href="assets/{{ 'mark' if has_mark else 'logo' }}.svg" type="image/svg+xml">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{ copy.seo_title }}">
+  <meta property="og:description" content="{{ copy.meta_description }}">
+  {% if has_og %}<meta property="og:image" content="assets/og.png">
+  <meta name="twitter:card" content="summary_large_image">{% endif %}
+  {% for font in fonts %}<link rel="preload" href="assets/fonts/{{ font }}.woff2" as="font" type="font/woff2" crossorigin>
+  {% endfor %}{% if photos.hero %}<link rel="preload" href="{{ photos.hero.src }}" as="image" fetchpriority="high">{% endif %}
   <style>
     :root {
       --primary: {{ brand.primary }};
@@ -16,6 +26,7 @@
       --ink: {{ brand.ink }};
       --paper: {{ brand.paper }};
     }
+{{ base_css }}
 {{ style_css }}
   </style>
 </head>
@@ -27,34 +38,92 @@
       <nav aria-label="Main">
         <a href="#about">About</a>
         <a href="#services">{% block services_nav %}Services{% endblock %}</a>
-        <a href="#contact">Contact</a>
+        <a href="#faq">FAQ</a>
+        {% if lead.phone %}<a class="nav-call" href="tel:{{ phone_href }}">Call {{ lead.phone }}</a>{% else %}<a class="nav-call" href="#contact">Contact</a>{% endif %}
       </nav>
     </div>
   </header>
 
   <main id="main">
-    <section class="hero" id="top">
-      <div class="wrap hero-inner">
-        {% block hero_kicker %}{% endblock %}
-        <h1>{{ copy.headline }}</h1>
-        <p class="lede">{{ copy.subheadline }}</p>
-        <a class="button" href="#contact">{{ copy.cta }}</a>
+    {% if hero_layout == "full" and photos.hero %}
+    <section class="hero hero--full" id="top">
+      <div class="hero-bg"><img src="{{ photos.hero.src }}" alt="" width="1600" height="1067" fetchpriority="high"></div>
+      <div class="wrap">
+        <div class="hero-copy">
+          <p class="eyebrow">{% block hero_kicker %}{{ (lead.category or "Local business") }}{% if lead.region %} in {{ lead.region }}{% endif %}{% endblock %}</p>
+          <h1>{{ copy.headline }}</h1>
+          <p class="lede">{{ copy.subheadline }}</p>
+          <div class="buttons">
+            <a class="button" href="#contact">{{ copy.cta }}</a>
+            <a class="button button--ghost" href="#services">{{ self.services_nav() }}</a>
+          </div>
+        </div>
       </div>
     </section>
+    {% elif hero_layout == "split" and photos.hero %}
+    <section class="hero hero--split" id="top">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">{{ self.hero_kicker() }}</p>
+          <h1>{{ copy.headline }}</h1>
+          <p class="lede">{{ copy.subheadline }}</p>
+          <div class="buttons">
+            <a class="button" href="#contact">{{ copy.cta }}</a>
+            {% if lead.phone %}<a class="button button--ghost" href="tel:{{ phone_href }}">{{ phone_icon }} {{ lead.phone }}</a>{% endif %}
+          </div>
+        </div>
+        <div class="hero-photo">
+          <img src="{{ photos.hero.src }}" alt="{{ photos.hero.alt }}" width="1200" height="1020" fetchpriority="high">
+          <div class="hero-badge">
+            <span class="badge-icon" aria-hidden="true">{{ icon }}</span>
+            <span><strong>{{ lead.business_name }}</strong><span>{{ (lead.category or "Local business") }}{% if lead.region %} · {{ lead.region }}{% endif %}</span></span>
+          </div>
+        </div>
+      </div>
+    </section>
+    {% else %}
+    <section class="hero hero--centered" id="top">
+      <div class="wrap hero-copy">
+        <p class="eyebrow">{{ self.hero_kicker() }}</p>
+        <h1>{{ copy.headline }}</h1>
+        <p class="lede">{{ copy.subheadline }}</p>
+        <div class="buttons">
+          <a class="button" href="#contact">{{ copy.cta }}</a>
+          {% if lead.phone %}<a class="button button--ghost" href="tel:{{ phone_href }}">{{ phone_icon }} {{ lead.phone }}</a>{% endif %}
+        </div>
+        {% if hero_art %}<img class="hero-art" src="assets/hero.svg" alt="" width="600" height="450">{% endif %}
+      </div>
+    </section>
+    {% endif %}
+
+    {% if trust %}
+    <section class="trust" aria-label="At a glance">
+      <ul class="wrap">
+        {% for item in trust %}<li>{{ item.icon }}<span><strong>{{ item.title }}</strong><span>{{ item.text }}</span></span></li>{% endfor %}
+      </ul>
+    </section>
+    {% endif %}
 
     <section class="about" id="about" aria-labelledby="about-title">
-      <div class="wrap narrow">
-        <h2 id="about-title">{% block about_title %}About {{ lead.business_name }}{% endblock %}</h2>
-        <p>{{ copy.about }}</p>
+      <div class="wrap {{ 'about-grid' if photos.about else 'narrow' }}">
+        {% if photos.about %}<div class="about-photo reveal"><img src="{{ photos.about.src }}" alt="{{ photos.about.alt }}" width="1000" height="800" loading="lazy"></div>{% endif %}
+        <div class="about-copy reveal">
+          <p class="eyebrow">About</p>
+          <h2 id="about-title">{% block about_title %}About {{ lead.business_name }}{% endblock %}</h2>
+          <p>{{ copy.about }}</p>
+        </div>
       </div>
     </section>
 
     <section class="services" id="services" aria-labelledby="services-title">
       <div class="wrap">
-        <h2 id="services-title">{% block services_title %}Services{% endblock %}</h2>
+        <div class="section-head reveal">
+          <p class="eyebrow">{{ self.services_nav() }}</p>
+          <h2 id="services-title">{% block services_title %}What we can help with{% endblock %}</h2>
+        </div>
         <ul class="cards">
           {% for service in copy.services %}
-          <li class="card">
+          <li class="card reveal">
             <span class="icon" aria-hidden="true">{{ icon }}</span>
             <h3>{{ service.name }}</h3>
             <p>{{ service.description }}</p>
@@ -64,31 +133,80 @@
       </div>
     </section>
 
-    {% if gallery %}
+    <section class="how" aria-labelledby="how-title">
+      <div class="wrap">
+        <div class="section-head center reveal">
+          <p class="eyebrow">How it works</p>
+          <h2 id="how-title">{% block how_title %}Simple from the first call{% endblock %}</h2>
+        </div>
+        <ol class="steps">
+          {% for step in steps %}<li class="reveal"><h3>{{ step.title }}</h3><p>{{ step.text }}</p></li>{% endfor %}
+        </ol>
+      </div>
+    </section>
+
+    {% if photos.gallery %}
     <section class="gallery" aria-labelledby="gallery-title">
       <div class="wrap">
-        <h2 id="gallery-title">Gallery</h2>
-        <ul class="gallery-grid">{% for img in gallery %}<li><img src="{{ img.src }}" alt="{{ img.alt }}" loading="lazy"></li>{% endfor %}</ul>
+        <div class="section-head reveal">
+          <p class="eyebrow">A look around</p>
+          <h2 id="gallery-title">{% block gallery_title %}The kind of work we do{% endblock %}</h2>
+        </div>
+        <ul class="gallery-grid">{% for img in photos.gallery %}<li class="reveal"><img src="{{ img.src }}" alt="{{ img.alt }}" width="800" height="600" loading="lazy"></li>{% endfor %}</ul>
+        <p class="photo-note">Photos are illustrative stock images.</p>
       </div>
     </section>
     {% endif %}
 
-    <section class="contact" id="contact" aria-labelledby="contact-title">
+    {% if faq %}
+    <section class="faq" id="faq" aria-labelledby="faq-title">
       <div class="wrap narrow">
-        <h2 id="contact-title">{% block contact_title %}Get in touch{% endblock %}</h2>
-        <dl class="contact-list">
-          {% if lead.phone %}<div><dt>Phone</dt><dd><a href="tel:{{ phone_href }}">{{ lead.phone }}</a></dd></div>{% endif %}
-          {% if lead.email %}<div><dt>Email</dt><dd><a href="mailto:{{ lead.email }}">{{ lead.email }}</a></dd></div>{% endif %}
-          {% if lead.address %}<div><dt>Address</dt><dd><address>{{ lead.address }}</address><a href="{{ map_url }}" rel="noopener">Open in Google Maps</a></dd></div>{% endif %}
-        </dl>
+        <div class="section-head center reveal">
+          <p class="eyebrow">FAQ</p>
+          <h2 id="faq-title">Good to know</h2>
+        </div>
+        {% for q in faq %}<details class="reveal"{% if loop.first %} open{% endif %}><summary>{{ q.question }}</summary><p>{{ q.answer }}</p></details>{% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="cta" aria-labelledby="cta-title">
+      <div class="wrap">
+        <div class="cta-box reveal">
+          <div>
+            <h2 id="cta-title">{% block cta_title %}Ready when you are{% endblock %}</h2>
+            <p>{{ copy.subheadline }}</p>
+          </div>
+          <div class="buttons">
+            {% if lead.phone %}<a class="button button--light" href="tel:{{ phone_href }}">{{ phone_icon }} Call {{ lead.phone }}</a>{% endif %}
+            {% if lead.email %}<a class="button button--light" href="mailto:{{ lead.email }}">Email us</a>{% endif %}
+            {% if not lead.phone and not lead.email %}<a class="button button--light" href="#contact">{{ copy.cta }}</a>{% endif %}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="contact" id="contact" aria-labelledby="contact-title">
+      <div class="wrap">
+        <div class="section-head reveal">
+          <p class="eyebrow">Contact</p>
+          <h2 id="contact-title">{% block contact_title %}Get in touch{% endblock %}</h2>
+        </div>
+        <div class="contact-cards">
+          {% if lead.phone %}<div class="contact-card reveal"><h3>Phone</h3><a href="tel:{{ phone_href }}">{{ lead.phone }}</a></div>{% endif %}
+          {% if lead.email %}<div class="contact-card reveal"><h3>Email</h3><a href="mailto:{{ lead.email }}">{{ lead.email }}</a></div>{% endif %}
+          {% if lead.address %}<div class="contact-card reveal"><h3>Address</h3><address>{{ lead.address }}</address><a class="map-link" href="{{ map_url }}" rel="noopener">Open in Google Maps</a></div>{% endif %}
+        </div>
       </div>
     </section>
   </main>
 
   <footer class="site-footer">
-    <div class="wrap">
-      <p>&copy; {{ year }} {{ lead.business_name }}{% if lead.region %} · {{ lead.region }}{% endif %}</p>
+    <div class="wrap footer-row">
+      <p><strong>{{ lead.business_name }}</strong>{% if lead.region %} · {{ lead.region }}{% endif %}</p>
+      <p>&copy; {{ year }} {{ lead.business_name }}{% if photos.any %} · Photos are illustrative stock images{% endif %}</p>
     </div>
   </footer>
+  {% if lead.phone %}<a class="callbar" href="tel:{{ phone_href }}">{{ phone_icon }} Call {{ lead.phone }}</a>{% endif %}
 </body>
 </html>

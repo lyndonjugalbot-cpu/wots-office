@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -63,6 +64,28 @@ class Research(BaseModel):
     source: str = "osm"
     regions: list[str] = Field(default_factory=list, max_length=20)
     limit: int = Field(default=50, ge=1, le=200)
+
+
+class PitchApproval(BaseModel):
+    notes: str = Field(default="", max_length=4000)
+    edits: dict[str, dict[str, str]] = Field(default_factory=dict)  # {"initial": {"subject", "body"}, "followup": ...}
+
+
+class Close(BaseModel):
+    won: bool
+    notes: str = Field(default="", max_length=4000)
+
+
+class Contact(BaseModel):
+    email: str | None = Field(default=None, max_length=255)
+    contact_name: str | None = Field(default=None, max_length=255)
+    found_at: str | None = Field(default=None, max_length=500)  # where the business publishes this address
+
+
+class SuppressionEntry(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    whole_domain: bool = False
+    reason: str = Field(default="added by hand", max_length=255)
 
 
 class Hire(BaseModel):
@@ -127,6 +150,14 @@ def create_app(rt: Runtime) -> FastAPI:
         data["assigned_to"] = names.get(item.assigned_employee_id or "")
         return data
 
+    def pitch_json(ctx: OrgContext, item_id: str) -> dict:
+        def when(dt):
+            return dt.isoformat() + "Z" if dt else None
+
+        return {kind: {"subject": m.subject, "body": m.body, "status": m.status, "scheduled_for": when(m.scheduled_for),
+                       "sent_at": when(m.sent_at)}
+                for kind, m in rt.integrations.for_office(ctx).outreach().messages(item_id).items()}
+
     def employee_names(ctx: OrgContext) -> dict[str, str]:
         return {e.id: e.name for e in rt.offices.employees(ctx, include_fired=True)}
 
@@ -151,7 +182,7 @@ def create_app(rt: Runtime) -> FastAPI:
         for key, status, n in rows:
             counts.setdefault(key, {})[status] = n
         workflows = []
-        gates = {"approvals": 0, "escalations": 0, "other": 0}
+        gates = {"approvals": 0, "pitches": 0, "replies": 0, "escalations": 0, "other": 0}
         for ow in rt.offices.workflows(ctx):
             wf = rt.catalogue.workflows[ow.workflow_key]
             workflows.append({"key": wf.key, "active": ow.active, "states": list(wf.states),
@@ -159,7 +190,8 @@ def create_app(rt: Runtime) -> FastAPI:
                               "missing_reason": ow.settings.get("missing_reason")})
             for state in wf.gates():
                 n = counts.get(wf.key, {}).get(state, 0)
-                bucket = "approvals" if state == "READY_FOR_APPROVAL" else "escalations" if state == wf.escalate_to else "other"
+                bucket = {"READY_FOR_APPROVAL": "approvals", "PITCH_DRAFTED": "pitches", "REPLIED": "replies"}.get(
+                    state, "escalations" if state == wf.escalate_to else "other")
                 gates[bucket] += n
         staff = rt.atlas.staff(ctx)
         designers = []
@@ -180,6 +212,10 @@ def create_app(rt: Runtime) -> FastAPI:
             "designers": designers, "pending": gates, "tick_seconds": rt.config.settings.atlas.tick_seconds,
             "research": {src: {"requests_today": requests_today(rt, ctx, src), "max_per_day": daily_limit(rt, src)}
                          for src in ("osm", "companies_house")},
+            "outreach": {"sent_today": rt.integrations.for_office(ctx).outreach().sent_today(),
+                         "daily_cap": rt.config.settings.outreach.daily_send_cap,
+                         "mailbox": bool(rt.integrations.for_office(ctx).from_address()),
+                         "terms_accepted": bool(ctx.settings.get("postal_address"))},
         }
 
     @app.get("/api/office")
@@ -330,6 +366,8 @@ def create_app(rt: Runtime) -> FastAPI:
             "copy": json.loads(copy_path.read_text()) if copy_path.exists() else None,
             "has_site": (folder / "site" / "index.html").exists(), "resume_status": resume,
             "files_base": f"/api/files/{auth.file_token(rt, ctx.org_id, item_id)}/",
+            "pitch": pitch_json(ctx, item_id),
+            "suppressed": rt.integrations.for_office(ctx).outreach().suppressed(item.email),
         }
 
     def serve_file(ctx: OrgContext, item_id: str, path: str) -> FileResponse:
@@ -374,6 +412,80 @@ def create_app(rt: Runtime) -> FastAPI:
     @app.post("/api/items/{item_id}/resolve")
     def resolve(item_id: str, body: Resolve, ctx: OrgContext = Depends(office)) -> dict:
         return act(ctx, actions.resolve_escalation, item_id, body.to_status, body.notes or None)
+
+    # ------------------------------------------------------------------ outreach (Phase 4)
+
+    def desk(ctx: OrgContext):
+        return rt.integrations.for_office(ctx).outreach()
+
+    @app.post("/api/items/{item_id}/pitch/approve")
+    def approve_pitch(item_id: str, body: PitchApproval, ctx: OrgContext = Depends(office)) -> dict:
+        return act(ctx, lambda b, c, i: actions.approve_pitch(b, desk(c), c, i, body.edits or None, body.notes or None),
+                   item_id)
+
+    @app.post("/api/items/{item_id}/pitch/reject")
+    def reject_pitch(item_id: str, body: Notes, ctx: OrgContext = Depends(office)) -> dict:
+        return act(ctx, actions.reject_pitch, item_id, body.notes)
+
+    @app.post("/api/items/{item_id}/replied")
+    def replied(item_id: str, body: Notes, ctx: OrgContext = Depends(office)) -> dict:
+        return act(ctx, actions.mark_replied, item_id, body.notes or None)
+
+    @app.post("/api/items/{item_id}/close")
+    def close(item_id: str, body: Close, ctx: OrgContext = Depends(office)) -> dict:
+        return act(ctx, actions.close_deal, item_id, body.won, body.notes or None)
+
+    @app.post("/api/items/{item_id}/suppress")
+    def suppress_item(item_id: str, body: Disqualify, ctx: OrgContext = Depends(office)) -> dict:
+        return act(ctx, lambda b, c, i: actions.suppress_lead(b, desk(c), c, i, body.reason or "asked not to be contacted"),
+                   item_id)
+
+    @app.post("/api/items/{item_id}/contact")
+    def contact(item_id: str, body: Contact, ctx: OrgContext = Depends(office)) -> dict:
+        """Add or correct contact details (e.g. an email found on the business's Facebook page)."""
+        if not ctx.can_edit:
+            raise HTTPException(403, "Viewers can't change leads")
+        try:
+            item = board.get(ctx, item_id)
+        except NotFound:
+            raise HTTPException(404, "No such work item in this office")
+        updates: dict = {}
+        if body.email is not None:
+            email = body.email.strip().lower()
+            if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+                raise HTTPException(400, "That doesn't look like an email address")
+            updates["email"] = email or None
+            record = {"added_by": ctx.user_id, "at": rt.atlas.clock().isoformat(timespec="seconds")}
+            if body.found_at:
+                record["found_at"] = body.found_at.strip()
+            updates["checks"] = {**(item.checks or {}), "email": record}
+        if body.contact_name is not None:
+            updates["contact_name"] = body.contact_name.strip() or None
+        if updates:
+            board.update_profile(ctx, item_id, updates, "user", ctx.user_id, "Contact details updated")
+        return item_json(ctx, board.get(ctx, item_id), employee_names(ctx))
+
+    @app.get("/api/suppression")
+    def suppression(ctx: OrgContext = Depends(office)) -> list[dict]:
+        return [{"id": r.id, "email": r.email, "domain": r.domain, "reason": r.reason,
+                 "added_at": r.added_at.isoformat() + "Z"} for r in desk(ctx).suppression_list()]
+
+    @app.post("/api/suppression")
+    def add_suppression(body: SuppressionEntry, ctx: OrgContext = Depends(office)) -> dict:
+        if not ctx.can_edit:
+            raise HTTPException(403, "Viewers can't change the suppression list")
+        try:
+            desk(ctx).suppress(body.email, body.reason, whole_domain=body.whole_domain)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"ok": True}
+
+    @app.delete("/api/suppression/{entry_id}")
+    def remove_suppression(entry_id: str, ctx: OrgContext = Depends(office)) -> dict:
+        if not ctx.can_manage_team:
+            raise HTTPException(403, "Only the CEO or owner can remove someone from the suppression list")
+        desk(ctx).unsuppress(entry_id)
+        return {"ok": True}
 
     # ------------------------------------------------------------------ intake
 

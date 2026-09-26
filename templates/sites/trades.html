@@ -1,3 +1,7 @@
 {% extends "base.html" %}
-{% block hero_kicker %}<p class="kicker">Local {{ (lead.category or "trade services") | lower }}</p>{% endblock %}
+{% block hero_kicker %}Local {{ (lead.category or "trade services") | lower }}{% if lead.region %} · {{ lead.region }}{% endif %}{% endblock %}
+{% block services_title %}Jobs we can help with{% endblock %}
+{% block how_title %}Getting the job done{% endblock %}
+{% block gallery_title %}The kind of work we do{% endblock %}
+{% block cta_title %}Got a job in mind?{% endblock %}
 {% block contact_title %}Talk to us about your job{% endblock %}

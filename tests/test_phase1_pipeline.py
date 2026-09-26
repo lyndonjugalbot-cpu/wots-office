@@ -1,5 +1,5 @@
 """Phase 1 acceptance (spec v1 §12, kept in v2 §16):
-  4 sample leads flow to APPROVED; a deliberately broken site gets NEEDS_FIX, is fixed and
+  4 sample leads flow to APPROVED (and on to a dry-run preview, Phase 3); a deliberately broken site gets NEEDS_FIX, is fixed and
   re-passes; developers never exceed WIP 2. Also: a CEO rejection with notes is revised and re-passes.
 
 Everything is real (the migrated internal office's Scout, Ledger, Quill, Iris/Juno, Pixel, Nova and
@@ -116,12 +116,14 @@ def test_four_sample_leads_reach_approved_with_one_fix_loop(make_runtime, clock,
                 rejected = True
             else:
                 approve_build(rt.board, ceo, item.id)
-        if len(items) == 4 and all(i.status == "APPROVED" for i in rt.board.items(ctx)):
+        if len(items) == 4 and all(i.status == "PREVIEW_DEPLOYED" for i in rt.board.items(ctx)):
             break
         clock.advance(seconds=30)
 
     final = {i.business_name: i for i in rt.board.items(ctx)}
-    assert {i.status for i in final.values()} == {"APPROVED"}, {k: v.status for k, v in final.items()}
+    # Approved sites went on to Dock (Phase 3), which in dry-run mode keeps the preview local
+    assert {i.status for i in final.values()} == {"PREVIEW_DEPLOYED"}, {k: v.status for k, v in final.items()}
+    assert all(i.checks["preview"]["live"] is False and i.preview_url is None for i in final.values())
     assert saw_needs_fix
     broken = final["Northgate Bookkeeping"]
     with rt.sessions() as s:

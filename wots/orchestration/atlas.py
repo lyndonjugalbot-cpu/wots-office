@@ -33,7 +33,7 @@ from ..core.jobs import InlineQueue, JobQueue
 from ..core.metering import BudgetExceeded, LLMConfigError, LLMError, Meter, start_of_local_day
 from ..core.models import Artifact, Employee, Event, Job, Organization, OrgWorkflow, QAReport
 from ..core.repo import scoped
-from ..employees.base import EmployeeContext, EmployeeInfo, EmployeeResult
+from ..employees.base import EmployeeContext, EmployeeInfo, EmployeeResult, NotYet
 from ..integrations.errors import IntegrationConfigError
 from . import assignment
 from .timers import run_timers
@@ -95,6 +95,7 @@ class Atlas:
         self.clock = clock
         self.impl_overrides: dict[str, object] = {}  # employee id -> implementation (tests, trials)
         self.integrations = None  # wots.integrations.toolbox.Integrations, set by the runtime
+        self.timer_state: dict = {}  # e.g. when each office's mailbox was last read
         self._tick_lock = threading.Lock()
         self._report_lock = threading.Lock()
         self._rotation = 0
@@ -253,11 +254,15 @@ class Atlas:
             if st.impl is not None:
                 by_type.setdefault(st.info.type.key, []).append(st)
                 by_id[st.info.id] = st
-        for state in wf.states.values():
-            if not state.employee_owned:
-                continue
+        # Finish work before starting more: the latest steps get the job budget first (so a big batch of
+        # new leads can't starve approved sites), then a forward pass lets items move several steps a tick
+        owned = [s for s in wf.states.values() if s.employee_owned]
+        dispatched: dict[str, str] = {}  # item id -> the status it was dispatched at, this tick
+        for state in [*reversed(owned), *owned]:
             items = self.board.items(ctx, workflow=wf.key, statuses=[state.name], unclaimed=True)
             for item in items:
+                if dispatched.get(item.id) == item.status:
+                    continue  # already worked on at this step this tick (it didn't move)
                 if budget[0] <= 0 or ctx.slug in report.llm_unavailable:
                     return
                 if self._escalate_if_exhausted(ctx, wf, item, report):  # reached the max during this tick
@@ -271,6 +276,7 @@ class Atlas:
                     continue
                 if not self.board.claim(ctx, item.id, who.info.id):
                     continue
+                dispatched[item.id] = item.status
                 budget[0] -= 1
                 task = state.task or who.info.type.task_kinds[0]
                 with self.sessions.begin() as s:
@@ -304,13 +310,21 @@ class Atlas:
                 task=task, dry_run=self.settings.dry_run,
                 llm=self.meter.for_employee(ctx, emp.id, item_id) if emp.type.uses_llm else None,
                 model=model, effort=emp.config.get("effort"), feedback=self.board.latest_feedback(ctx, item_id),
-                tools=self.integrations.for_office(ctx) if self.integrations else None)
+                tools=self.integrations.for_office(ctx) if self.integrations else None, now=self.clock())
             result = who.impl.run(item, task, job_ctx)
             self._apply(ctx, emp, item, result)
             self._job_status(ctx, job_id, "done")
             with self._report_lock:
                 report.ran[emp.name] += 1
             self.board.release(ctx, item_id, emp.id)
+        except NotYet as e:
+            # Scheduled, not failed: e.g. waiting for the recipient's send window or tomorrow's send cap
+            self._job_status(ctx, job_id, "scheduled", e.note)
+            self.board.release(ctx, item_id, emp.id)
+            seconds = max(60.0, (e.until - self.clock()).total_seconds())
+            self.board.hold(ctx, item_id, f"{emp.id}:scheduled", seconds)
+            if e.announce:
+                self.board.log(ctx, item_id, "employee", emp.id, e.note)
         except BudgetExceeded as e:
             self._job_status(ctx, job_id, "paused", str(e))
             self.board.release(ctx, item_id, emp.id)  # not the item's fault: try again later

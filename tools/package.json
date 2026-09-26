@@ -3,6 +3,7 @@
   "private": true,
   "description": "Node tools Hawk calls from Python (spec §3: Lighthouse CLI)",
   "dependencies": {
-    "lighthouse": "^13.5.0"
+    "lighthouse": "^13.5.0",
+    "wrangler": "^4.139.0"
   }
 }

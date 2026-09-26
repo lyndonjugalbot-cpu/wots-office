@@ -36,7 +36,8 @@ export interface Overview {
   counts: Record<string, Record<string, number>>;
   workflows: { key: string; active: boolean; states: string[]; waiting_for: string[]; missing_reason: string | null }[];
   designers: { name: string; active: number; max: number; mode: string | null; style: string | null }[];
-  pending: { approvals: number; escalations: number; other: number };
+  pending: { approvals: number; pitches: number; replies: number; escalations: number; other: number };
+  outreach: { sent_today: number; daily_cap: number; mailbox: boolean; terms_accepted: boolean };
   tick_seconds: number;
   research: Record<"osm" | "companies_house", { requests_today: number; max_per_day: number }>;
 }
@@ -76,6 +77,7 @@ export interface Lead {
   entity_type: string | null;
   registry_id: string | null;
   website_found: string | null;
+  preview_url: string | null;
   social_links: Record<string, string>;
   checks: Checks;
   updated_at: string;
@@ -87,6 +89,8 @@ export interface Checks {
   dedupe?: { id: string; business_name: string; match: string }[];
   website?: { listed: string | null; domains: { domain: string; status: string; evidence: string }[] };
   registry?: { source: string; candidates: string[]; match: Record<string, string> | null };
+  preview?: { host: string; alias: string; url: string; live: boolean; deployed_at: string; removed_at?: string };
+  email?: { found_at?: string; added_by?: string; at?: string };
 }
 
 export interface QAIssue {
@@ -117,6 +121,24 @@ export interface LeadDetail {
   has_site: boolean;
   resume_status: string | null;
   files_base: string;
+  pitch: Partial<Record<"initial" | "followup", PitchMessage>>;
+  suppressed: string | null;
+}
+
+export interface PitchMessage {
+  subject: string;
+  body: string;
+  status: string; // draft | approved | sent | saved_to_outbox
+  scheduled_for: string | null;
+  sent_at: string | null;
+}
+
+export interface SuppressionEntry {
+  id: string;
+  email: string | null;
+  domain: string | null;
+  reason: string;
+  added_at: string;
 }
 
 export interface ConfigField {

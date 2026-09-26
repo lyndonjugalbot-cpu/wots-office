@@ -70,3 +70,65 @@ def resolve_escalation(board: Board, ctx: OrgContext, item_id: str, to_status: s
     updates = {"disqualify_reason": notes or "dropped_after_escalation"} if decision == "dropped" else None
     return board.transition(ctx, item_id, to_status, "user", ctx.user_id,
                             notes or f"Escalation {decision.replace('_', ' ')}", updates=updates)
+
+
+# ---------------------------------------------------------------- outreach (Phase 4)
+
+
+def approve_pitch(board: Board, desk, ctx: OrgContext, item_id: str, edits: dict | None = None,
+                  notes: str | None = None):
+    """Approve the pitch and its follow-up together, optionally with the CEO's edits. Echo then sends
+    it in the recipient's window."""
+    _gate_check(board, ctx, item_id, {"PITCH_DRAFTED"})
+    for kind, change in (edits or {}).items():
+        if kind not in {"initial", "followup"} or not str(change.get("body", "x")).strip():
+            raise ActionError("A pitch can't be empty")
+        body = change.get("body")
+        if body is not None and "unsubscribe" not in body.lower():
+            raise ActionError("Keep the footer: every email must say how to opt out")
+    desk.approve(item_id, edits)
+    item = board.transition(ctx, item_id, "PITCH_APPROVED", "user", ctx.user_id,
+                            notes or ("Pitch approved with edits" if edits else "Pitch approved"))
+    _record(board, ctx, item_id, "pitch", "approved", notes)
+    return item
+
+
+def reject_pitch(board: Board, ctx: OrgContext, item_id: str, notes: str):
+    _gate_check(board, ctx, item_id, {"PITCH_DRAFTED"})
+    if not notes.strip():
+        raise ActionError("Say what to change, so Echo knows how to redraft it")
+    _record(board, ctx, item_id, "pitch", "rejected", notes.strip())
+    return board.transition(ctx, item_id, "PREVIEW_DEPLOYED", "user", ctx.user_id, f"Pitch sent back: {notes.strip()}")
+
+
+def mark_replied(board: Board, ctx: OrgContext, item_id: str, notes: str | None = None):
+    """For replies that arrive outside the connected mailbox (a phone call, another inbox)."""
+    item = board.get(ctx, item_id)
+    if item.status != "PITCHED":
+        raise ActionError("Only a pitched lead can be marked as replied")
+    if not ctx.can_edit:
+        raise Forbidden("Viewers can't change leads")
+    return board.transition(ctx, item_id, "REPLIED", "user", ctx.user_id, notes or "Replied (recorded by hand)")
+
+
+def close_deal(board: Board, ctx: OrgContext, item_id: str, won: bool, notes: str | None = None):
+    _gate_check(board, ctx, item_id, {"REPLIED"})
+    item = board.transition(ctx, item_id, "WON" if won else "LOST", "user", ctx.user_id,
+                            notes or ("Won" if won else "Lost"))
+    _record(board, ctx, item_id, "reply", "won" if won else "lost", notes)
+    return item
+
+
+def suppress_lead(board: Board, desk, ctx: OrgContext, item_id: str, reason: str = "asked not to be contacted"):
+    """Never email this lead's address again. A pitched lead is closed as LOST."""
+    if not ctx.can_edit:
+        raise Forbidden("Viewers can't change the suppression list")
+    item = board.get(ctx, item_id)
+    if not item.email:
+        raise ActionError("This lead has no email address")
+    desk.suppress(item.email, reason)
+    if item.status == "PITCHED":
+        board.transition(ctx, item_id, "LOST", "user", ctx.user_id, f"Suppressed: {reason}")
+    else:
+        board.log(ctx, item_id, "user", ctx.user_id, f"{item.email} suppressed: {reason}")
+    return board.get(ctx, item_id)

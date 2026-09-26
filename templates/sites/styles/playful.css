@@ -1,39 +1,8 @@
-/* Style profile: playful. Rounded shapes, bright accents, friendly type. */
-* { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-body { margin: 0; font-family: "Trebuchet MS", "Avenir Next", system-ui, sans-serif; color: var(--ink); background: #fffaf2; line-height: 1.65; font-size: 1.0625rem; }
-img { max-width: 100%; height: auto; }
-a { color: var(--primary-dark); }
-.wrap { width: min(1080px, 100% - 2.5rem); margin-inline: auto; }
-.narrow { width: min(720px, 100% - 2.5rem); }
-.skip { position: absolute; left: -999px; }
-.skip:focus { left: 1rem; top: 1rem; background: #fff; padding: .5rem 1rem; z-index: 10; }
-.site-header { background: #fff; border-bottom: 4px dotted var(--accent); }
-.header-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-height: 76px; flex-wrap: wrap; }
-.logo img { display: block; height: 46px; width: auto; }
-nav { display: flex; gap: .4rem; flex-wrap: wrap; }
-nav a { text-decoration: none; color: var(--ink); font-weight: 700; padding: .65rem 1rem; border-radius: 999px; }
-nav a:hover, nav a:focus-visible { background: var(--accent); }
-.hero { background: var(--primary); color: #fff; padding: clamp(4rem, 10vw, 7.5rem) 0; border-radius: 0 0 48px 48px; }
-.hero-inner { max-width: 760px; }
-.kicker { display: inline-block; background: #fff; color: var(--primary-dark); font-weight: 800; padding: .35rem .9rem; border-radius: 999px; margin: 0 0 1rem; }
-h1 { font-size: clamp(2.2rem, 6vw, 3.6rem); line-height: 1.08; margin: 0 0 1rem; }
-h2 { font-size: clamp(1.7rem, 4vw, 2.3rem); margin: 0 0 1.1rem; color: var(--primary-dark); }
-h3 { font-size: 1.2rem; margin: .5rem 0 .35rem; }
-.lede { font-size: 1.22rem; margin: 0 0 2rem; color: #fff; }
-.button { display: inline-block; background: var(--accent); color: #1c1917; font-weight: 800; text-decoration: none; padding: 1rem 1.8rem; border-radius: 999px; min-height: 48px; }
-.button:hover, .button:focus-visible { transform: rotate(-2deg) scale(1.03); }
-section { padding: clamp(3rem, 7vw, 5.5rem) 0; }
-.cards { list-style: none; padding: 0; margin: 0; display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
-.card { background: #fff; border-radius: 28px; padding: 1.6rem; box-shadow: 0 8px 0 var(--accent); }
-.card p { margin: 0; color: #44403c; }
-.icon { display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: 16px; background: var(--primary); color: #fff; }
-.icon svg { width: 24px; height: 24px; }
-.contact-list { display: grid; gap: 1rem; margin: 0; }
-.contact-list div { display: grid; grid-template-columns: 120px 1fr; gap: .5rem; padding: 1rem; background: #fff; border-radius: 18px; }
-.contact-list dt { font-weight: 800; }
-.contact-list dd { margin: 0; }
-.contact-list a { display: inline-block; padding: .35rem 0; font-weight: 700; }
-address { font-style: normal; }
-.site-footer { padding: 2rem 0; color: #57534e; }
-@media (max-width: 560px) { .contact-list div { grid-template-columns: 1fr; } }
+/* Playful: rounded Fredoka headlines, Nunito body, bubbly shapes and a touch of colour. Fonts: fredoka nunito */
+@font-face { font-family: "Fredoka"; src: url("assets/fonts/fredoka.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+@font-face { font-family: "Nunito"; src: url("assets/fonts/nunito.woff2") format("woff2"); font-weight: 200 1000; font-display: swap; }
+:root { --font-body: "Nunito", system-ui, sans-serif; --font-head: "Fredoka", "Nunito", sans-serif; --head-weight: 600;
+  --radius: 24px; --radius-lg: 36px; --surface-2: color-mix(in srgb, var(--accent) 12%, #ffffff); --line: #ece7f3;
+  --hero-tint: color-mix(in srgb, var(--accent) 18%, #ffffff); }
+.icon { border-radius: 50%; background: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--ink); }
+.steps li::before { color: var(--accent); -webkit-text-stroke: 1.5px var(--ink); }
